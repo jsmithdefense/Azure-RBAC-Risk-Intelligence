@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import json
 import urllib.error
 import urllib.parse
@@ -238,4 +239,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        sys.exit(1)

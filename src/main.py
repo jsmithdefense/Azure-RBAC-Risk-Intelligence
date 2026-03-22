@@ -140,11 +140,11 @@ def print_assigned_role_classifications(
     runtime_actions: dict[str, str],
 ) -> None:
     """
-    Print a compact diagnostic view of assigned role classifications.
+    Print a compact view of assigned role and the reason for the classification.
     """
-    print("Assigned role classifications:")
+    print("Assigned roles:")
     print()
-    print(f"{'Role':<45} {'Classification':<28} {'Trigger'}")
+    print(f"{'Role':<45} {'Classification':<28} {'Reason'}")
     print("-" * 90)
 
     rows = sorted(
@@ -188,11 +188,10 @@ def main() -> None:
         for sa in scored
     ]
 
-    principal_summaries = summarize_principal_risk(scored)
+    principal_summaries = summarize_principal_risk(scored, runtime_cfg)
 
-    print(f"Enumerated role definitions: {len(role_lookup)}")
-    print(f"Enumerated role assignments: {len(records)}")
-    print(f"Assigned Roles: {len(runtime_taxonomy)}")
+    print(f"Enumerated roles: {len(role_lookup)}")
+    print(f"Total Assigned Roles: {len(records)}")
     print()
 
     print_assigned_role_classifications(runtime_taxonomy, runtime_actions)
@@ -214,14 +213,14 @@ def main() -> None:
         principal_name = name_cache[cache_key]
 
         print(
-            f"Name = {principal_name} | "
-            f"Type = {p.principal_type} | "
-            f"ID = {p.principal_id} | "
-            f"Severity = {p.highest_severity} | "
-            f"Score = {p.highest_score} | "
-            f"Assignments = {len(p.risky_assignments)} | "
-            f"Riskiest Role = {p.highest_assignment.record.role_name}"
-        )
+    f"Name = {principal_name} | "
+    f"Type = {p.principal_type} | "
+    f"ID = {p.principal_id} | "
+    f"Severity = {p.cumulative_severity} | "
+    f"Score = {p.cumulative_score} | "
+    f"Assignments = {len(p.risky_assignments)} | "
+    f"Riskiest Role = {p.highest_assignment.record.role_name}"
+)
 
         for sa in p.risky_assignments:
             r = sa.record

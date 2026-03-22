@@ -86,8 +86,8 @@ class ScoredAssignment:
 class PrincipalRiskSummary:
     principal_id: str
     principal_type: str
-    highest_score: int
-    highest_severity: str
+    cumulative_score: int  # renamed from highest_score
+    cumulative_severity: str  # renamed from highest_severity
     highest_assignment: ScoredAssignment
     risky_assignments: list[ScoredAssignment]
 
@@ -118,9 +118,10 @@ def score_records(records: list[RoleAssignmentRecord], cfg: RiskConfig) -> list[
 
 def summarize_principal_risk(
     scored_assignments: list[ScoredAssignment],
+    cfg: RiskConfig,
 ) -> list[PrincipalRiskSummary]:
     """
-    Group scored assignments by principal and rank principals by highest risk assignment.
+    Group scored assignments by principal and rank principals by cumulative risk score.
     """
     grouped: Dict[tuple[str, str], list[ScoredAssignment]] = {}
 
@@ -136,17 +137,22 @@ def summarize_principal_risk(
     for (principal_id, principal_type), assignments in grouped.items():
         assignments.sort(key=lambda x: x.score, reverse=True)
         highest = assignments[0]
+        
+        # Calculate cumulative score across all assignments.
+
+        cumulative_score = sum(a.score for a in assignments)
+        cumulative_severity = severity_from_score(cumulative_score, cfg)
 
         summaries.append(
             PrincipalRiskSummary(
                 principal_id=principal_id,
                 principal_type=principal_type,
-                highest_score=highest.score,
-                highest_severity=highest.severity,
+                cumulative_score=cumulative_score,
+                cumulative_severity=cumulative_severity,
                 highest_assignment=highest,
                 risky_assignments=assignments,
             )
         )
 
-    summaries.sort(key=lambda x: x.highest_score, reverse=True)
+    summaries.sort(key=lambda x: x.cumulative_score, reverse=True)
     return summaries

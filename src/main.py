@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import replace
+from typing import Dict, List
 
 from azure.identity import DefaultAzureCredential
 from azure.mgmt.authorization import AuthorizationManagementClient
@@ -14,7 +15,8 @@ from .config_loader import load_risk_config
 from .rbac_collector import (
     build_role_definition_lookup,
     collect_role_assignments,
-    get_subscription_id,
+    enumerate_subscriptions,
+    select_subscriptions_interactive,
 )
 from .risk_model import score_records, summarize_principal_risk
 from .role_taxonomy_generator import infer_bucket_from_actions
@@ -119,6 +121,43 @@ def resolve_principal_name(
         return principal_id
 
 
+def get_group_member_count(
+    credential: DefaultAzureCredential,
+    group_id: str,
+) -> int:
+    """
+    Get the member count for a group via Microsoft Graph.
+    
+    Returns:
+        Number of members, or 0 if lookup fails
+    """
+    url = f"https://graph.microsoft.com/v1.0/groups/{urllib.parse.quote(group_id)}/members/$count"
+    
+    try:
+        token = credential.get_token("https://graph.microsoft.com/.default").token
+        
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "text/plain",
+                "ConsistencyLevel": "eventual",
+            },
+        )
+        
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            count = int(resp.read().decode("utf-8"))
+            return count
+    
+    except (
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        TimeoutError,
+        ValueError,
+    ):
+        return 0
+
+
 def _bucket_rank(bucket: str) -> int:
     """
     Lower number = higher priority in the diagnostic output.
@@ -159,48 +198,98 @@ def print_assigned_role_classifications(
     print()
 
 
-def main() -> None:
-    subscription_id = get_subscription_id()
-
-    credential = DefaultAzureCredential(
-        exclude_interactive_browser_credential=True
-    )
+def analyze_subscription(
+    subscription_id: str,
+    subscription_name: str,
+    credential: DefaultAzureCredential,
+    cfg,
+) -> tuple[List, dict, dict]:
+    """
+    Analyze a single subscription and return records, taxonomy, and actions.
+    """
+    print(f"\nAnalyzing subscription: {subscription_name} ({subscription_id})")
+    
     authz = AuthorizationManagementClient(credential, subscription_id)
-
     role_lookup = build_role_definition_lookup(authz, subscription_id)
     records = collect_role_assignments(authz, subscription_id, role_lookup)
-
-    cfg = load_risk_config()
-
+    
     runtime_taxonomy, runtime_actions = build_runtime_taxonomy(
         records,
         authz,
         subscription_id,
         cfg.role_taxonomy,
     )
+    
+    print(f"  Found {len(records)} role assignments across {len(runtime_taxonomy)} roles")
+    
+    return records, runtime_taxonomy, runtime_actions
 
-    runtime_cfg = replace(cfg, role_taxonomy=runtime_taxonomy)
 
-    scored = score_records(records, runtime_cfg)
-
+def main() -> None:
+    credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+    
+    # Enumerate and select subscriptions
+    available_subs = enumerate_subscriptions(credential)
+    
+    if not available_subs:
+        print("No active subscriptions found.")
+        sys.exit(1)
+    
+    selected_subs = select_subscriptions_interactive(available_subs)
+    
+    if not selected_subs:
+        print("No subscriptions selected.")
+        sys.exit(1)
+    
+    print(f"\nAnalyzing {len(selected_subs)} subscription(s)...\n")
+    
+    cfg = load_risk_config()
+    
+    # Collect data from all selected subscriptions
+    all_records = []
+    all_taxonomies = {}
+    all_actions = {}
+    
+    for sub in selected_subs:
+        records, taxonomy, actions = analyze_subscription(
+            sub['id'],
+            sub['name'],
+            credential,
+            cfg,
+        )
+        
+        all_records.extend(records)
+        all_taxonomies.update(taxonomy)
+        all_actions.update(actions)
+    
+    # Aggregate and score across all subscriptions
+    runtime_cfg = replace(cfg, role_taxonomy=all_taxonomies)
+    scored = score_records(all_records, runtime_cfg)
+    
     scored = [
-        replace(sa, triggering_action=runtime_actions.get(sa.record.role_name, ""))
+        replace(sa, triggering_action=all_actions.get(sa.record.role_name, ""))
         for sa in scored
     ]
-
+    
     principal_summaries = summarize_principal_risk(scored, runtime_cfg)
-
-    print(f"Enumerated roles: {len(role_lookup)}")
-    print(f"Total Assigned Roles: {len(records)}")
+    
+    # Print tenant-level summary
     print()
-
-    print_assigned_role_classifications(runtime_taxonomy, runtime_actions)
-
+    print("TENANT-LEVEL RISK SUMMARY")
+    print("="*90)
+    print(f"Subscriptions analyzed: {len(selected_subs)}")
+    print(f"Assigned roles: {len(all_records)}")
+    print(f"Unique Assignments: {len(all_taxonomies)}")
+    print()
+    
+    print_assigned_role_classifications(all_taxonomies, all_actions)
+    
     print("Top risky principals:")
     print()
-
+    
     name_cache: dict[tuple[str, str], str] = {}
-
+    member_count_cache: dict[str, int] = {}
+    
     for p in principal_summaries[:10]:
         cache_key = (p.principal_id, p.principal_type)
         if cache_key not in name_cache:
@@ -209,31 +298,43 @@ def main() -> None:
                 p.principal_id,
                 p.principal_type,
             )
-
+        
         principal_name = name_cache[cache_key]
-
+        
+        # Get member count for groups
+        member_info = ""
+        if p.principal_type == "Group":
+            if p.principal_id not in member_count_cache:
+                member_count_cache[p.principal_id] = get_group_member_count(
+                    credential,
+                    p.principal_id,
+                )
+            count = member_count_cache[p.principal_id]
+            if count > 0:
+                member_info = f" ({count} members)"
+        
         print(
-    f"Name = {principal_name} | "
-    f"Type = {p.principal_type} | "
-    f"ID = {p.principal_id} | "
-    f"Severity = {p.cumulative_severity} | "
-    f"Score = {p.cumulative_score} | "
-    f"Assignments = {len(p.risky_assignments)} | "
-    f"Riskiest Role = {p.highest_assignment.record.role_name}"
-)
-
+            f"Name = {principal_name}{member_info} | "
+            f"Type = {p.principal_type} | "
+            f"ID = {p.principal_id} | "
+            f"Severity = {p.cumulative_severity} | "
+            f"Score = {p.cumulative_score} | "
+            f"Assignments = {len(p.risky_assignments)} | "
+            f"Riskiest Role = {p.highest_assignment.record.role_name}"
+        )
+        
         for sa in p.risky_assignments:
             r = sa.record
             print(
-                f"- {sa.severity} | "
+                f"  - {sa.severity} | "
                 f"{sa.score} | "
                 f"{r.role_name} | "
                 f"Action = {sa.triggering_action or 'N/A'} | "
                 f"Classification = {sa.bucket} | "
                 f"Scope = {r.scope_type} | "
-                f"Path = {r.scope}"
+                f"Sub = ...{r.subscription_id[-8:]}"
             )
-
+        
         print()
 
 

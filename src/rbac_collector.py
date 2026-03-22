@@ -7,6 +7,60 @@ from azure.mgmt.authorization import AuthorizationManagementClient
 from .models import RoleAssignmentRecord
 from .scope_utils import classify_scope
 
+def enumerate_subscriptions(credential: DefaultAzureCredential) -> List[Dict[str, str]]:
+    """
+    Enumerate all subscriptions accessible to the credential.
+    
+    Returns:
+        List of dicts with 'id', 'name', 'state' keys
+    """
+    from azure.mgmt.resource import SubscriptionClient
+    
+    sub_client = SubscriptionClient(credential)
+    subscriptions = []
+    
+    for sub in sub_client.subscriptions.list():
+        if sub.state == "Enabled":  # Only include active subscriptions
+            subscriptions.append({
+                'id': sub.subscription_id,
+                'name': sub.display_name,
+                'state': sub.state
+            })
+    
+    return subscriptions
+
+
+def select_subscriptions_interactive(
+    available_subs: List[Dict[str, str]]
+) -> List[Dict[str, str]]:
+    """
+    Present subscriptions to user and let them choose which to analyze.
+    
+    Returns:
+        Selected subscriptions (or all if user chooses that option)
+    """
+    print("\nAvailable subscriptions:")
+    print(f"{'No':<5} {'Name':<50} {'ID':<40} {'State'}")
+    print("-" * 100)
+    
+    for idx, sub in enumerate(available_subs, 1):
+        print(f"[{idx}]{'':<3} {sub['name']:<50} {sub['id']:<40} {sub['state']}")
+    
+    print(f"\n[0]    Analyze all subscriptions")
+    print()
+    
+    choice = input("Select subscriptions to analyze (comma-separated numbers, or 0 for all): ").strip()
+    
+    if choice == "0":
+        return available_subs
+    
+    try:
+        indices = [int(x.strip()) for x in choice.split(",")]
+        selected = [available_subs[i - 1] for i in indices if 1 <= i <= len(available_subs)]
+        return selected if selected else available_subs
+    except (ValueError, IndexError):
+        print("Invalid selection, analyzing all subscriptions.")
+        return available_subs
 
 def get_subscription_id() -> str:
     sub_id = os.environ.get("AZURE_SUBSCRIPTION_ID")

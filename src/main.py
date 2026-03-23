@@ -157,6 +157,34 @@ def get_group_member_count(
     ):
         return 0
 
+def extract_scope_display_name(scope: str, scope_type: str) -> str:
+    """
+    Extract a human-readable name from an Azure scope path.
+    
+    Examples:
+    - /subscriptions/abc/resourceGroups/MyRG → "MyRG"
+    - /subscriptions/abc/resourceGroups/MyRG/providers/.../myVnet → "MyRG/myVnet"
+    - /subscriptions/abc → "subscription"
+    """
+    if scope_type == "subscription":
+        return "subscription"
+    
+    parts = scope.split('/')
+    
+    # Extract resource group name
+    try:
+        rg_index = parts.index('resourceGroups')
+        rg_name = parts[rg_index + 1] if rg_index + 1 < len(parts) else "unknown"
+    except (ValueError, IndexError):
+        return scope_type  # Fallback to generic type
+    
+    # For resource-level, add the resource name
+    if scope_type == "resource" and len(parts) > 0:
+        resource_name = parts[-1]  # Last segment is resource name
+        return f"{rg_name}/{resource_name}"
+    
+    # For resource_group level, just return the RG name
+    return rg_name
 
 def _bucket_rank(bucket: str) -> int:
     """
@@ -325,16 +353,17 @@ def main() -> None:
         
         for sa in p.risky_assignments:
             r = sa.record
+            scope_display = extract_scope_display_name(r.scope, r.scope_type)
             print(
                 f"  - {sa.severity} | "
                 f"{sa.score} | "
                 f"{r.role_name} | "
                 f"Action = {sa.triggering_action or 'N/A'} | "
                 f"Classification = {sa.bucket} | "
-                f"Scope = {r.scope_type} | "
+                f"Scope = {scope_display} ({r.scope_type}) | "
                 f"Sub = ...{r.subscription_id[-8:]}"
             )
-        
+
         print()
 
 

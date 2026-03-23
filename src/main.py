@@ -157,6 +157,7 @@ def get_group_member_count(
     ):
         return 0
 
+
 def extract_scope_display_name(scope: str, scope_type: str) -> str:
     """
     Extract a human-readable name from an Azure scope path.
@@ -185,6 +186,75 @@ def extract_scope_display_name(scope: str, scope_type: str) -> str:
     
     # For resource_group level, just return the RG name
     return rg_name
+
+
+def calculate_subscription_risk_scores(
+    scored_assignments: list,
+    selected_subs: list,
+) -> list[dict]:
+    """
+    Calculate total risk score per subscription.
+    
+    Returns:
+        List of dicts with subscription info and risk scores, sorted by risk (highest first)
+    """
+    # Group assignments by subscription
+    sub_scores = {}
+    
+    for sa in scored_assignments:
+        sub_id = sa.record.subscription_id
+        if sub_id not in sub_scores:
+            sub_scores[sub_id] = {
+                'total_score': 0,
+                'assignment_count': 0,
+                'unique_principals': set(),
+            }
+        
+        sub_scores[sub_id]['total_score'] += sa.score
+        sub_scores[sub_id]['assignment_count'] += 1
+        sub_scores[sub_id]['unique_principals'].add(sa.record.principal_id)
+    
+    # Build subscription risk summaries
+    subscription_risks = []
+    
+    for sub in selected_subs:
+        sub_id = sub['id']
+        scores = sub_scores.get(sub_id, {'total_score': 0, 'assignment_count': 0, 'unique_principals': set()})
+        
+        subscription_risks.append({
+            'id': sub_id,
+            'name': sub['name'],
+            'total_score': scores['total_score'],
+            'assignment_count': scores['assignment_count'],
+            'principal_count': len(scores['unique_principals']),
+        })
+    
+    # Sort by total score (highest first)
+    subscription_risks.sort(key=lambda x: x['total_score'], reverse=True)
+    
+    return subscription_risks
+
+
+def print_subscription_risk_ranking(subscription_risks: list) -> None:
+    """
+    Print subscription risk ranking table.
+    """
+    print("SUBSCRIPTION RISK RANKING")
+    print("="*90)
+    print(f"{'Rank':<6} {'Subscription':<45} {'Risk Score':<12} {'Assignments':<13} {'Principals'}")
+    print("-" * 90)
+    
+    for idx, sub in enumerate(subscription_risks, 1):
+        print(
+            f"{idx:<6} "
+            f"{sub['name']:<45} "
+            f"{sub['total_score']:<12} "
+            f"{sub['assignment_count']:<13} "
+            f"{sub['principal_count']}"
+        )
+    
+    print()
+
 
 def _bucket_rank(bucket: str) -> int:
     """
@@ -277,6 +347,14 @@ def main() -> None:
     all_records = []
     all_taxonomies = {}
     all_actions = {}
+    role_subscriptions = {}
+    sub_id_to_name = {sub['id']: sub['name'] for sub in selected_subs}
+
+    # Now all_records is fully populated — build role_subscriptions here
+    for record in all_records:
+        if record.role_name not in role_subscriptions:
+            role_subscriptions[record.role_name] = set()
+        role_subscriptions[record.role_name].add(sub_id_to_name[record.subscription_id])
     
     for sub in selected_subs:
         records, taxonomy, actions = analyze_subscription(
@@ -310,8 +388,12 @@ def main() -> None:
     print(f"Unique Assignments: {len(all_taxonomies)}")
     print()
     
-    print_assigned_role_classifications(all_taxonomies, all_actions)
+    # Calculate and display subscription risk scores
+    subscription_risks = calculate_subscription_risk_scores(scored, selected_subs)
+    print_subscription_risk_ranking(subscription_risks)
     
+    print_assigned_role_classifications(all_taxonomies, all_actions)
+
     print("Top risky principals:")
     print()
     

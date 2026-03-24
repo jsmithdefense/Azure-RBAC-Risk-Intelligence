@@ -185,7 +185,16 @@ def generate_pdf_report(
                 _p(str(sub["principal_count"]), tbl_cell_right),
             ]
         )
-    ranking_table = Table(ranking_rows, colWidths=[0.4 * inch, 3.8 * inch, 0.9 * inch, 0.9 * inch, 0.7 * inch])
+    ranking_table = Table(
+        ranking_rows,
+        colWidths=[
+            0.58 * inch,
+            3.36 * inch,
+            0.88 * inch,
+            1.20 * inch,
+            0.88 * inch,
+        ],
+    )
     ranking_table.setStyle(
         TableStyle(
             [
@@ -215,10 +224,14 @@ def generate_pdf_report(
                 _p(role_name, tbl_cell),
                 _p(all_taxonomies.get(role_name, "custom_or_unknown"), tbl_cell),
                 _p(all_actions.get(role_name, "") or "N/A", tbl_cell),
-                _p(", ".join(_short_sub_name(s) for s in subs) if subs else "N/A", tbl_cell),
+                _p(", ".join(subs) if subs else "N/A", tbl_cell),
             ]
         )
-    role_table = Table(role_rows, colWidths=[2.0 * inch, 1.6 * inch, 1.4 * inch, 2.1 * inch], repeatRows=1)
+    role_table = Table(
+        role_rows,
+        colWidths=[1.70 * inch, 1.30 * inch, 1.20 * inch, 2.90 * inch],
+        repeatRows=1,
+    )
     role_table.setStyle(
         TableStyle(
             [
@@ -285,7 +298,7 @@ def generate_pdf_report(
             )
         assign_table = Table(
             assign_rows,
-            colWidths=[0.72 * inch, 0.42 * inch, 1.05 * inch, 1.05 * inch, 0.95 * inch, 1.55 * inch, 1.21 * inch],
+            colWidths=[0.72 * inch, 0.52 * inch, 1.05 * inch, 1.05 * inch, 0.95 * inch, 1.45 * inch, 1.21 * inch],
             repeatRows=1,
         )
         assign_table.setStyle(

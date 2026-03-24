@@ -4,8 +4,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
@@ -49,6 +51,10 @@ def _footer(canvas, doc, timestamp: str) -> None:
     canvas.drawString(doc.leftMargin, 0.35 * inch, f"Generated: {timestamp}")
     canvas.drawRightString(letter[0] - doc.rightMargin, 0.35 * inch, f"Page {canvas.getPageNumber()}")
     canvas.restoreState()
+
+
+def _p(text: str, style: ParagraphStyle) -> Paragraph:
+    return Paragraph(escape(str(text)), style)
 
 
 def _split_ai_sections(summary_text: str) -> tuple[list[str], list[str]]:
@@ -114,6 +120,10 @@ def generate_pdf_report(
     h_style = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=14, leading=18, spaceBefore=8, spaceAfter=6)
     body = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=10, leading=13)
     mono = ParagraphStyle("Mono", parent=body, fontName="Courier", fontSize=8.5, leading=11)
+    tbl_hdr = ParagraphStyle("TblHdr", parent=body, fontName="Helvetica-Bold", fontSize=9, leading=11, spaceBefore=0, spaceAfter=0)
+    tbl_cell = ParagraphStyle("TblCell", parent=body, fontSize=8.5, leading=11, spaceBefore=0, spaceAfter=0)
+    tbl_cell_right = ParagraphStyle("TblCellR", parent=tbl_cell, alignment=TA_RIGHT)
+    tbl_cell_mono = ParagraphStyle("TblCellMono", parent=tbl_cell, fontName="Courier", fontSize=8, leading=10)
 
     story = []
 
@@ -156,19 +166,32 @@ def generate_pdf_report(
 
     # Section 2
     story.append(Paragraph("Section 2: Subscription Risk Ranking", h_style))
-    ranking_rows = [["Rank", "Subscription", "Risk Score", "Assignments", "Principals"]]
+    ranking_rows = [
+        [
+            _p("Rank", tbl_hdr),
+            _p("Subscription", tbl_hdr),
+            _p("Risk Score", tbl_hdr),
+            _p("Assignments", tbl_hdr),
+            _p("Principals", tbl_hdr),
+        ]
+    ]
     for i, sub in enumerate(subscription_risks, 1):
         ranking_rows.append(
-            [str(i), _short_sub_name(sub["name"]), str(sub["total_score"]), str(sub["assignment_count"]), str(sub["principal_count"])]
+            [
+                _p(str(i), tbl_cell_right),
+                _p(sub["name"], tbl_cell),
+                _p(str(sub["total_score"]), tbl_cell_right),
+                _p(str(sub["assignment_count"]), tbl_cell_right),
+                _p(str(sub["principal_count"]), tbl_cell_right),
+            ]
         )
-    ranking_table = Table(ranking_rows, colWidths=[0.5 * inch, 2.5 * inch, 1.0 * inch, 1.0 * inch, 0.8 * inch])
+    ranking_table = Table(ranking_rows, colWidths=[0.4 * inch, 3.8 * inch, 0.9 * inch, 0.9 * inch, 0.7 * inch])
     ranking_table.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF8")),
                 ("GRID", (0, 0), (-1, -1), 0.35, colors.lightgrey),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ]
         )
     )
@@ -177,26 +200,33 @@ def generate_pdf_report(
 
     # Section 3
     story.append(Paragraph("Section 3: Assigned Role Classifications", h_style))
-    role_rows = [["Role", "Classification", "Triggering Action", "Subscriptions"]]
+    role_rows = [
+        [
+            _p("Role", tbl_hdr),
+            _p("Classification", tbl_hdr),
+            _p("Triggering Action", tbl_hdr),
+            _p("Subscriptions", tbl_hdr),
+        ]
+    ]
     for role_name in sorted(all_taxonomies.keys(), key=str.lower):
         subs = sorted(role_subscriptions.get(role_name, set()))
         role_rows.append(
             [
-                role_name,
-                all_taxonomies.get(role_name, "custom_or_unknown"),
-                all_actions.get(role_name, "") or "N/A",
-                ", ".join(_short_sub_name(s) for s in subs) if subs else "N/A",
+                _p(role_name, tbl_cell),
+                _p(all_taxonomies.get(role_name, "custom_or_unknown"), tbl_cell),
+                _p(all_actions.get(role_name, "") or "N/A", tbl_cell),
+                _p(", ".join(_short_sub_name(s) for s in subs) if subs else "N/A", tbl_cell),
             ]
         )
-    role_table = Table(role_rows, colWidths=[1.8 * inch, 1.3 * inch, 1.1 * inch, 2.1 * inch], repeatRows=1)
+    role_table = Table(role_rows, colWidths=[2.0 * inch, 1.6 * inch, 1.4 * inch, 2.1 * inch], repeatRows=1)
     role_table.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF8")),
                 ("GRID", (0, 0), (-1, -1), 0.3, colors.lightgrey),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 8.5),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
             ]
         )
     )
@@ -220,17 +250,56 @@ def generate_pdf_report(
             )
         )
         story.append(Paragraph(f"ID: <font name='Courier'>{principal.principal_id}</font>", mono))
+        assign_rows = [
+            [
+                _p("Severity", tbl_hdr),
+                _p("Score", tbl_hdr),
+                _p("Role", tbl_hdr),
+                _p("Classification", tbl_hdr),
+                _p("Action", tbl_hdr),
+                _p("Scope", tbl_hdr),
+                _p("Subscription", tbl_hdr),
+            ]
+        ]
         for sa in principal.risky_assignments:
             r = sa.record
             scope_disp = _scope_display_name(r.scope, r.scope_type)
-            line = (
-                f"- <b>{sa.severity}</b> ({sa.score}) | {r.role_name} | "
-                f"{sa.bucket} | Action: {sa.triggering_action or 'N/A'} | "
-                f"Scope: <font name='Courier'>{scope_disp} ({r.scope_type})</font> | "
-                f"Sub: {sub_id_to_name.get(r.subscription_id, r.subscription_id)} "
-                f"(<font name='Courier'>{r.subscription_id}</font>)"
+            sev_color = _severity_color(sa.severity)
+            sub_nm = sub_id_to_name.get(r.subscription_id, r.subscription_id)
+            assign_rows.append(
+                [
+                    Paragraph(
+                        f"<font color='{sev_color}'><b>{escape(sa.severity)}</b></font>",
+                        tbl_cell,
+                    ),
+                    _p(str(sa.score), tbl_cell_right),
+                    _p(r.role_name, tbl_cell),
+                    _p(sa.bucket, tbl_cell),
+                    _p(sa.triggering_action or "N/A", tbl_cell),
+                    Paragraph(
+                        f"<font name='Courier'>{escape(scope_disp)} ({escape(r.scope_type)})</font>",
+                        tbl_cell_mono,
+                    ),
+                    _p(sub_nm, tbl_cell),
+                ]
             )
-            story.append(Paragraph(line, body))
+        assign_table = Table(
+            assign_rows,
+            colWidths=[0.72 * inch, 0.42 * inch, 1.05 * inch, 1.05 * inch, 0.95 * inch, 1.55 * inch, 1.21 * inch],
+            repeatRows=1,
+        )
+        assign_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF8")),
+                    ("GRID", (0, 0), (-1, -1), 0.3, colors.lightgrey),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        story.append(assign_table)
         story.append(Spacer(1, 0.12 * inch))
 
     # Section 5 (optional)

@@ -285,7 +285,53 @@ def run_ai_enrichment(
             )
             summary_text = _extract_text_response(response) or "- Unable to generate summary."
             summaries[(principal.principal_id, principal.principal_type)] = summary_text
-            print(summary_text)
+            # Improve terminal readability without changing the stored report content.
+            formatted = []
+            lines = summary_text.splitlines()
+            in_capability = False
+            in_recommended = False
+
+            def _is_bullet(line: str) -> bool:
+                s = line.lstrip()
+                return s.startswith("- ")
+
+            def _is_step(line: str) -> bool:
+                s = line.lstrip()
+                return len(s) > 1 and s[0].isdigit() and s[1] == "."
+
+            for line in lines:
+                stripped = line.strip()
+
+                if stripped == "Capability Summary:":
+                    formatted.append(line)
+                    in_capability = True
+                    in_recommended = False
+                    continue
+
+                if stripped == "Recommended Actions:":
+                    if formatted and formatted[-1].strip() != "":
+                        formatted.append("")
+                    formatted.append(line)
+                    in_capability = False
+                    in_recommended = True
+                    continue
+
+                if in_capability and _is_bullet(line):
+                    if formatted and _is_bullet(formatted[-1]):
+                        formatted.append("")
+                    formatted.append(line)
+                    continue
+
+                if in_recommended and _is_step(line):
+                    prev = formatted[-1] if formatted else ""
+                    if prev and _is_step(prev):
+                        formatted.append("")
+                    formatted.append(line)
+                    continue
+
+                formatted.append(line)
+
+            print("\n".join(formatted).rstrip())
             print()
         except Exception as exc:
             print(f"  Error enriching {principal_name}: {exc}")

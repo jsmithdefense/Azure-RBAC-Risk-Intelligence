@@ -19,7 +19,7 @@ Azure environments accumulate RBAC assignments over time. Role names are opaque,
 
 This tool:
 - Enumerates all role assignments across every accessible subscription
-- Classifies roles by what their permissions allow, not just names
+- Classifies roles by what permissions allow and at what scope thry apply
 - Scores principals by cumulative privilege exposure across all subscriptions
 - Generates AI-powered capability summaries and prioritized remediation playbooks
 - Parses AI output into executable remediations with per-action approval

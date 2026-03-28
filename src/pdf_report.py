@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -54,7 +55,12 @@ def _footer(canvas, doc, timestamp: str) -> None:
 
 
 def _p(text: str, style: ParagraphStyle) -> Paragraph:
-    return Paragraph(escape(str(text)), style)
+    parts = re.split(r'\*\*(.+?)\*\*', str(text))
+    xml = "".join(
+        f"<b>{escape(p)}</b>" if i % 2 else escape(p)
+        for i, p in enumerate(parts)
+    )
+    return Paragraph(xml, style)
 
 
 def _split_ai_sections(summary_text: str) -> tuple[list[str], list[str]]:
@@ -131,18 +137,18 @@ def generate_pdf_report(
     generated_iso = json_payload.get("metadata", {}).get("generated_timestamp", datetime.now().isoformat(timespec="seconds"))
 
     # Title page
-    story.append(Paragraph("Azure RBAC Risk Report", title_style))
+    story.append(_p("Azure RBAC Risk Report", title_style))
     story.append(Paragraph(f"<b>{tenant_name}</b>", styles["Heading3"]))
     story.append(Spacer(1, 0.18 * inch))
-    story.append(Paragraph(f"Generated: {generated_iso}", body))
+    story.append(_p(f"Generated: {generated_iso}", body))
     story.append(Spacer(1, 0.08 * inch))
-    story.append(Paragraph("Subscriptions analyzed:", body))
+    story.append(_p("Subscriptions analyzed:", body))
     for sub in selected_subs:
         story.append(Paragraph(f"- {sub['name']} (<font name='Courier'>{sub['id']}</font>)", body))
     story.append(PageBreak())
 
     # Section 1
-    story.append(Paragraph("Section 1: Tenant-Level Risk Summary", h_style))
+    story.append(_p("Section 1: Tenant-Level Risk Summary", h_style))
     summary_table = Table(
         [
             ["Subscriptions analyzed", str(len(selected_subs))],
@@ -165,7 +171,7 @@ def generate_pdf_report(
     story.append(Spacer(1, 0.16 * inch))
 
     # Section 2
-    story.append(Paragraph("Section 2: Subscription Risk Ranking", h_style))
+    story.append(_p("Section 2: Subscription Risk Ranking", h_style))
     ranking_rows = [
         [
             _p("Rank", tbl_hdr),
@@ -208,7 +214,7 @@ def generate_pdf_report(
     story.append(Spacer(1, 0.16 * inch))
 
     # Section 3
-    story.append(Paragraph("Section 3: Assigned Role Classifications", h_style))
+    story.append(_p("Section 3: Assigned Role Classifications", h_style))
     role_rows = [
         [
             _p("Role", tbl_hdr),
@@ -247,7 +253,7 @@ def generate_pdf_report(
     story.append(PageBreak())
 
     # Section 4
-    story.append(Paragraph("Section 4: Principal Risk Analysis", h_style))
+    story.append(_p("Section 4: Principal Risk Analysis", h_style))
     sub_id_to_name = {s["id"]: s["name"] for s in selected_subs}
     for principal in top_principals:
         p_name = principal_names.get((principal.principal_id, principal.principal_type), principal.principal_id)
@@ -318,7 +324,7 @@ def generate_pdf_report(
     # Section 5 (optional)
     if ai_present:
         story.append(PageBreak())
-        story.append(Paragraph("Section 5: AI Enrichment Summary", h_style))
+        story.append(_p("Section 5: AI Enrichment Summary", h_style))
         for principal in top_principals:
             key = (principal.principal_id, principal.principal_type)
             summary = enriched_map.get(key, "")
@@ -329,11 +335,11 @@ def generate_pdf_report(
             cap_lines, rec_lines = _split_ai_sections(summary)
             story.append(Paragraph("<b>Capability Summary</b>", body))
             for line in cap_lines:
-                story.append(Paragraph(line, body))
+                story.append(_p(line, body))
             story.append(Spacer(1, 0.06 * inch))
             story.append(Paragraph("<b>Recommended Actions</b>", body))
             for line in rec_lines:
-                story.append(Paragraph(line, body))
+                story.append(_p(line, body))
             story.append(Spacer(1, 0.10 * inch))
 
     doc.build(story, onFirstPage=lambda c, d: _footer(c, d, generated_iso), onLaterPages=lambda c, d: _footer(c, d, generated_iso))

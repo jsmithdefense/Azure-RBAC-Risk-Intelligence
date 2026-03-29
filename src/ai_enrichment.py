@@ -321,6 +321,7 @@ def run_ai_enrichment(
     top_principals: list[Any],
     principal_names: dict[tuple[str, str], str],
     selected_subs: list[dict[str, str]],
+    quiet: bool = False,
 ) -> None:
     selected = _select_principals(top_principals, principal_names)
     if not selected:
@@ -342,9 +343,10 @@ def run_ai_enrichment(
     model_name, payload_map = model_and_payloads
     client = Anthropic(api_key=api_key)
 
-    print()
-    print("AI ENRICHMENT SUMMARY")
-    print("=" * 90)
+    if not quiet:
+        print()
+        print("AI ENRICHMENT SUMMARY")
+        print("=" * 90)
 
     summaries: dict[tuple[str, str], str] = {}
     total = len(selected)
@@ -421,11 +423,12 @@ def run_ai_enrichment(
 
                 formatted.append(line)
 
-            print("\n".join(formatted).rstrip())
             parsed_actions = _parse_remediation_actions(summary_text)
-            if parsed_actions is not None:
-                print(f"  -> Generated {len(parsed_actions)} structured remediation action(s).")
-            print()
+            if not quiet:
+                print("\n".join(formatted).rstrip())
+                if parsed_actions is not None:
+                    print(f"  -> Generated {len(parsed_actions)} structured remediation action(s).")
+                print()
         except Exception as exc:
             print(f"  Error enriching {principal_name}: {exc}")
             continue

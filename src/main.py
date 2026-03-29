@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sys
 import json
 import urllib.error
@@ -328,6 +329,14 @@ def analyze_subscription(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Azure RBAC Risk Analyzer")
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress AI enrichment output; only print progress lines",
+    )
+    args = parser.parse_args()
+
     try:
         credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
         available_subs = enumerate_subscriptions(credential)
@@ -477,6 +486,7 @@ def main() -> None:
         top_principals=top_principals,
         principal_names=name_cache,
         selected_subs=selected_subs,
+        quiet=args.quiet,
     )
 
     export_pdf = input("Export report as PDF? [y/N]: ").strip().lower()

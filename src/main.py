@@ -413,15 +413,10 @@ def main() -> None:
     subscription_risks = calculate_subscription_risk_scores(scored, selected_subs)
     print_subscription_risk_ranking(subscription_risks)
     
-    print_assigned_role_classifications(all_taxonomies, all_actions)
-
-    print("Top risky principals:")
-    print()
-    
     name_cache: dict[tuple[str, str], str] = {}
     member_count_cache: dict[str, int] = {}
     top_principals = principal_summaries[:10]
-    
+
     for p in top_principals:
         cache_key = (p.principal_id, p.principal_type)
         if cache_key not in name_cache:
@@ -430,45 +425,52 @@ def main() -> None:
                 p.principal_id,
                 p.principal_type,
             )
-        
-        principal_name = name_cache[cache_key]
-        
-        # Get member count for groups
-        member_info = ""
-        if p.principal_type == "Group":
-            if p.principal_id not in member_count_cache:
-                member_count_cache[p.principal_id] = get_group_member_count(
-                    credential,
-                    p.principal_id,
-                )
-            count = member_count_cache[p.principal_id]
-            if count > 0:
-                member_info = f" ({count} members)"
-        
-        print(
-            f"Name = {principal_name}{member_info} | "
-            f"Type = {p.principal_type} | "
-            f"ID = {p.principal_id} | "
-            f"Severity = {p.cumulative_severity} | "
-            f"Score = {p.cumulative_score} | "
-            f"Assignments = {len(p.risky_assignments)} | "
-            f"Riskiest Role = {p.highest_assignment.record.role_name}"
-        )
-        
-        for sa in p.risky_assignments:
-            r = sa.record
-            scope_display = extract_scope_display_name(r.scope, r.scope_type)
-            print(
-                f"  - {sa.severity} | "
-                f"{sa.score} | "
-                f"{r.role_name} | "
-                f"Action = {sa.triggering_action or 'N/A'} | "
-                f"Classification = {sa.bucket} | "
-                f"Scope = {scope_display} ({r.scope_type}) | "
-                f"Sub = ...{r.subscription_id[-8:]}"
+        if p.principal_type == "Group" and p.principal_id not in member_count_cache:
+            member_count_cache[p.principal_id] = get_group_member_count(
+                credential,
+                p.principal_id,
             )
 
+    if not args.quiet:
+        print_assigned_role_classifications(all_taxonomies, all_actions)
+
+        print("Top risky principals:")
         print()
+
+        for p in top_principals:
+            cache_key = (p.principal_id, p.principal_type)
+            principal_name = name_cache[cache_key]
+
+            member_info = ""
+            if p.principal_type == "Group":
+                count = member_count_cache.get(p.principal_id, 0)
+                if count > 0:
+                    member_info = f" ({count} members)"
+
+            print(
+                f"Name = {principal_name}{member_info} | "
+                f"Type = {p.principal_type} | "
+                f"ID = {p.principal_id} | "
+                f"Severity = {p.cumulative_severity} | "
+                f"Score = {p.cumulative_score} | "
+                f"Assignments = {len(p.risky_assignments)} | "
+                f"Riskiest Role = {p.highest_assignment.record.role_name}"
+            )
+
+            for sa in p.risky_assignments:
+                r = sa.record
+                scope_display = extract_scope_display_name(r.scope, r.scope_type)
+                print(
+                    f"  - {sa.severity} | "
+                    f"{sa.score} | "
+                    f"{r.role_name} | "
+                    f"Action = {sa.triggering_action or 'N/A'} | "
+                    f"Classification = {sa.bucket} | "
+                    f"Scope = {scope_display} ({r.scope_type}) | "
+                    f"Sub = ...{r.subscription_id[-8:]}"
+                )
+
+            print()
 
     report_path = write_report(
         selected_subs=selected_subs,

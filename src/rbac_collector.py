@@ -14,7 +14,7 @@ def enumerate_subscriptions(credential: DefaultAzureCredential) -> List[Dict[str
     Returns:
         List of dicts with 'id', 'name', 'state' keys
     """
-    from azure.mgmt.resource import SubscriptionClient
+    from azure.mgmt.subscription import SubscriptionClient
     
     sub_client = SubscriptionClient(credential)
     subscriptions = []

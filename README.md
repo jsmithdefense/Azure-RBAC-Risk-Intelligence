@@ -1,4 +1,4 @@
-# AI RBAC Remediation Engine
+# RBAC Remediation Engine
 
 **Enumerate, score, and remediate overprivileged identities across your Azure tenant.**
 

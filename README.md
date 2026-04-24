@@ -29,6 +29,37 @@ Sample Finding:
 
 ---
 
+## How It Works
+
+### Role Classification
+Roles are classified by their permitted `actions` & `dataActions` as opposed to role names.
+
+| Classification | What It Means |
+|---|---|
+| `privilege_escalation` | Can modify access control |
+| `resource_control_broad` | Can create or modify infrastructure |
+| `resource_control_narrow` | Controls a specific service domain |
+| `data_access` | Can read or extract stored data |
+| `security_visibility` | Can view monitoring or security telemetry |
+| `read_only` | Limited to metadata inspection |
+
+### Cumulative Risk Scoring
+Principal risk is the sum of all assignment scores across all subscriptions — not just the highest single role. This surfaces identities that accumulate significant privilege through multiple lower-severity assignments.
+
+### AI Enrichment
+Select which principals to analyze, choose your model, review the estimated cost before confirming. Each enriched principal gets a plain-English capability summary and a prioritized remediation playbook with **Why**, **Steps**, and **Validation** for each action.
+
+### Remediation Engine
+AI output is parsed into structured, machine-executable actions. Each action is presented for individual approval, logged to an audit file, executed via the Azure SDK, and validated.
+
+| Action Type | Behavior |
+|---|---|
+| `remove_role_assignment` | Executes removal via Azure SDK, validates success |
+| `convert_to_pim_eligible` | Provides step-by-step PIM instructions |
+| `manual_review_required` | Logs description for human execution |
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -63,7 +94,7 @@ export ANTHROPIC_API_KEY=your_key_here
 python -m src.main
 ```
 
-### Quiet Mode (suppresses verbose output — AI summaries and principal details written to PDF report only)
+### Quiet Mode (AI summaries and principal details written to PDF report only)
 ```bash
 python -m src.main --quiet
 ```
@@ -183,37 +214,6 @@ REMEDIATION SUMMARY
   Manual/skipped: 1
   Audit log:      reports/remediation_audit_20260329_142506.json
 ```
-
----
-
-## How It Works
-
-### Role Classification
-Roles are classified by their permitted `actions` & `dataActions` as opposed to role names.
-
-| Classification | What It Means |
-|---|---|
-| `privilege_escalation` | Can modify access control |
-| `resource_control_broad` | Can create or modify infrastructure |
-| `resource_control_narrow` | Controls a specific service domain |
-| `data_access` | Can read or extract stored data |
-| `security_visibility` | Can view monitoring or security telemetry |
-| `read_only` | Limited to metadata inspection |
-
-### Cumulative Risk Scoring
-Principal risk is the sum of all assignment scores across all subscriptions — not just the highest single role. This surfaces identities that accumulate significant privilege through multiple lower-severity assignments.
-
-### AI Enrichment
-Select which principals to analyze, choose your model, review the estimated cost before confirming. Each enriched principal gets a plain-English capability summary and a prioritized remediation playbook with **Why**, **Steps**, and **Validation** for each action.
-
-### Remediation Engine
-AI output is parsed into structured, machine-executable actions. Each action is presented for individual approval, logged to an audit file, executed via the Azure SDK, and validated.
-
-| Action Type | Behavior |
-|---|---|
-| `remove_role_assignment` | Executes removal via Azure SDK, validates success |
-| `convert_to_pim_eligible` | Provides step-by-step PIM instructions |
-| `manual_review_required` | Logs description for human execution |
 
 ---
 

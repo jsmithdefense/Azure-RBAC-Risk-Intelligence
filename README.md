@@ -1,4 +1,4 @@
-# Azure Identity Risk Intelligence
+# Azure RBAC Risk Intelligence
 
 Azure environments accumulate RBAC assignments over time. Role names are vague, assignments are scattered across subscriptions, and no native tooling tells you which identities carry the greatest risk, why, and what to do about it.
 

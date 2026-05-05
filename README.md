@@ -32,7 +32,7 @@ Sample Finding:
 ## How It Works
 
 ### Role Classification
-Roles are classified by their permitted `actions` & `dataActions` as opposed to role names.
+Roles are classified by their permitted `actions` & `dataActions`
 
 | Classification | What It Means |
 |---|---|
@@ -44,7 +44,7 @@ Roles are classified by their permitted `actions` & `dataActions` as opposed to 
 | `read_only` | Limited to metadata inspection |
 
 ### Cumulative Risk Scoring
-Principal risk is the sum of all assignment scores across all subscriptions — not just the highest single role. This surfaces identities that accumulate significant privilege through multiple lower-severity assignments.
+Principal risk is the sum of all assignment scores across all subscriptions. This surfaces identities that accumulate significant privilege through multiple lower-severity assignments.
 
 ### AI Enrichment
 Select which principals to analyze, choose your model, review the estimated cost before confirming. Each enriched principal gets a plain-English capability summary and a prioritized remediation playbook with **Why**, **Steps**, and **Validation** for each action.

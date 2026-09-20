@@ -1,145 +1,99 @@
+"""
+AI enrichment: plain-English capability summaries and remediation playbooks.
+
+Provider-agnostic. The endpoint, model, and credential come from
+config/llm.json and the environment (see src/llm_client.py). A hosted API and a
+local inference server take the same code path -- there is no special case for
+either, so a business can point this at its own endpoint and the RBAC data never
+leaves its network.
+
+Two design rules worth knowing before editing:
+
+1. **The model returns JSON. Python renders all text.** The previous version
+   asked the model to produce an exact prose layout -- indentation depth, blank
+   line placement, title punctuation -- and then regex-searched that prose for an
+   embedded JSON block. That is fragile for a strong model and unreliable for a
+   small local one. Now the model returns data and `_render_summary_text` does
+   the formatting, so output is identical every run and the parse is deterministic.
+
+2. **The rendered text keeps the old format exactly.** `pdf_report` splits it on
+   the "Capability Summary:" and "Recommended Actions:" headings, and the report
+   JSON stores it under `capability_summary`. Those consumers are unchanged.
+"""
+
 from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any
 
-from anthropic import Anthropic
+from .config_loader import load_llm_defaults
+from .llm_client import (
+    LLMConfig,
+    LLMError,
+    complete_json,
+    estimate_cost_usd,
+    estimate_tokens,
+    resolve_config,
+)
+from .scope_utils import extract_scope_display_name
 
 SYSTEM_PROMPT = """You are a cloud security analyst specializing in Azure RBAC risk interpretation.
-Given principal-level RBAC data, produce three sections exactly in this format:
 
-Capability Summary:
-- bullet
-- bullet
+You receive JSON describing one Azure principal and its role assignments. Return ONLY a JSON object with exactly these three keys:
 
-Recommended Actions:
-
-1. [CRITICAL | Effort: Low] Action Title
-
-   Why
-   One sentence explaining the risk
-
-   Steps
-     1. Step
-     2. Step
-     3. Step
-
-   Validation
-   One sentence confirming success
-
-2. [HIGH | Effort: Medium] Action Title
-...
-
-Remediation Actions:
-
-```json
-[
-  {
-    "priority": "CRITICAL",
-    "effort": "Low",
-    "title": "Human readable title",
-    "action_type": "remove_role_assignment",
-    "parameters": {
-      "principal_id": "exact principal_id from input",
-      "principal_type": "Group",
-      "role_name": "exact role name from input",
-      "scope": "exact full scope path from input",
-      "subscription_id": "exact subscription_id from input",
-      "subscription_name": "subscription name"
-    },
-    "validation": {
-      "type": "role_assignment_absent",
-      "description": "One sentence describing how to verify success"
+{
+  "capability_summary": [
+    "3 to 5 plain English sentences describing what this principal can actually do across the environment. Focus on operational impact and realistic abuse potential. Do not just restate role names."
+  ],
+  "recommended_actions": [
+    {
+      "priority": "CRITICAL | HIGH | MEDIUM | LOW",
+      "effort": "Low | Medium | High",
+      "title": "Short imperative title",
+      "why": "One sentence tying this to a specific risk in the input.",
+      "steps": ["Specific Azure-native step", "Another step"],
+      "validation": "One concrete verifiable check."
     }
-  }
-]
-```
-
-Requirements — Capability Summary:
-- Include 3-5 plain English bullets explaining what the principal can actually do across the environment.
-- Focus on operational impact and realistic abuse potential, not just repeating role names.
-
-Requirements — Recommended Actions:
-- Include 3-5 recommended actions per principal, ordered by priority: all CRITICAL first, then HIGH, then MEDIUM, then LOW.
-- Each action title stands alone on its own line formatted exactly as: an opening bracket, PRIORITY, space, pipe, space, Effort:, space, EFFORT_LEVEL, closing bracket, space, Action Title (e.g. [CRITICAL | Effort: Low] Action Title). Do not number the actions.
-- PRIORITY must be exactly one of: CRITICAL, HIGH, MEDIUM, LOW — based on severity of the risk being addressed.
-- EFFORT_LEVEL must be exactly one of: Low, Medium, High — based on how complex the remediation is to execute.
-- After a blank line, include the subheading Why alone on its own line in bold, indented with three spaces, then a blank line, then one sentence explaining the specific risk (indented consistently with Why).
-- After a blank line, include the subheading Steps alone on its own line in bold, (same indentation as Why), then a blank line, then numbered steps 1. 2. 3. (use more numbers if needed), each indented with five spaces so they nest under Steps.
-- After a blank line, include the subheading Validation alone on its own line in bold, (same indentation as Why), then a blank line, then one sentence describing a concrete, verifiable check.
-
-Content rules for Recommended Actions:
-- Why must tie directly to the Capability Summary or assignment risks.
-- Steps must be specific and Azure-native: exact portal paths (e.g. Subscription > Access control (IAM)), Azure CLI commands, or Microsoft Entra PIM / Privileged Identity Management workflows where appropriate.
-- Steps must reference specific role names, resource groups or scope display names, subscription names, and principal names from the input context.
-- Validation must be verifiable (e.g. IAM no longer lists the assignment, PIM state, or expected az role assignment list outcome) — not generic advice.
-- Prefer Azure-native fixes: PIM eligible assignments, narrower scope, dedicated admin groups, just-in-time access where appropriate.
-- Keep each action concise but complete; separate actions with a blank line.
-
-Requirements — Remediation Actions:
-- Output a valid JSON array in a markdown code block tagged as `json` under the "Remediation Actions:" heading.
-- Generate one action object per Recommended Action where the action type can be mapped.
-- Use action_type "remove_role_assignment" when the recommended action removes a permanent role assignment.
-- Use action_type "convert_to_pim_eligible" when the recommended action converts a permanent assignment to PIM eligible.
-- For any other remediation that cannot be mapped to these two types, use action_type "manual_review_required" and include a top-level "description" field with plain English instructions instead of "parameters" and "validation".
-- Use EXACT values for principal_id, scope, and subscription_id from the input payload — do not approximate or invent them.
-- priority and effort must match the corresponding Recommended Action.
-- validation.type must be "role_assignment_absent" for remove_role_assignment actions, and "manual" for all others.
-- Return only the three sections above with no preamble or closing commentary."""
-
-MODEL_CATALOG = {
-    "1": {
-        "name": "claude-haiku-4-5-20251001",
-        "label": "fastest, lowest cost",
-        "input_per_mtok": 1.0,
-        "output_per_mtok": 5.0,
-    },
-    "2": {
-        "name": "claude-sonnet-4-6",
-        "label": "recommended, balanced",
-        "input_per_mtok": 3.0,
-        "output_per_mtok": 15.0,
-    },
-    "3": {
-        "name": "claude-opus-4-6",
-        "label": "most intelligent, highest cost",
-        "input_per_mtok": 5.0,
-        "output_per_mtok": 25.0,
-    },
+  ],
+  "remediation_actions": [
+    {
+      "priority": "CRITICAL",
+      "effort": "Low",
+      "title": "Matches a recommended_actions title",
+      "action_type": "remove_role_assignment | convert_to_pim_eligible | manual_review_required",
+      "parameters": {
+        "principal_id": "exact principal_id from the input",
+        "principal_type": "exact principal_type from the input",
+        "role_name": "exact role_name from the input",
+        "scope": "exact full scope path from the input",
+        "subscription_id": "exact subscription_id from the input",
+        "subscription_name": "exact subscription_name from the input"
+      },
+      "validation": {
+        "type": "role_assignment_absent",
+        "description": "How to verify success."
+      }
+    }
+  ]
 }
 
+Rules:
+- Give 3 to 5 recommended_actions.
+- Steps must be Azure-native and specific: exact portal paths such as Subscription > Access control (IAM), az CLI commands, or Microsoft Entra PIM workflows. Reference the actual role names, scopes, subscription names, and principal name from the input.
+- Prefer least-privilege fixes: PIM eligible assignments, narrower scope, dedicated admin groups, just-in-time access.
+- Produce one remediation_actions entry per recommended action whose type can be mapped.
+- Use action_type "remove_role_assignment" to remove a permanent assignment, "convert_to_pim_eligible" to make an assignment PIM eligible, and "manual_review_required" for anything else.
+- For "manual_review_required", omit "parameters" and "validation" and include a top-level "description" with plain instructions instead.
+- validation.type must be "role_assignment_absent" for remove_role_assignment, otherwise "manual".
+- Copy principal_id, scope, and subscription_id EXACTLY from the input. Never invent or abbreviate an identifier.
+- Return only the JSON object. No prose, no markdown fence, no commentary."""
 
-def _is_bullet(line: str) -> bool:
-    return line.lstrip().startswith("- ")
-
-
-def _is_step(line: str) -> bool:
-    s = line.lstrip()
-    return len(s) > 1 and s[0].isdigit() and s[1] == "."
-
-
-def _estimate_tokens(text: str) -> int:
-    # Rough approximation: 1 token ~= 4 characters for mixed English/JSON payload.
-    return max(1, int(len(text) / 4))
-
-
-def _estimate_cost_usd(input_tokens: int, output_tokens: int, model_info: dict[str, Any]) -> float:
-    input_cost = (input_tokens / 1_000_000.0) * model_info["input_per_mtok"]
-    output_cost = (output_tokens / 1_000_000.0) * model_info["output_per_mtok"]
-    return input_cost + output_cost
-
-
-def _extract_text_response(message: Any) -> str:
-    parts: list[str] = []
-    for block in getattr(message, "content", []):
-        block_type = getattr(block, "type", "")
-        if block_type == "text":
-            parts.append(getattr(block, "text", "").strip())
-    return "\n".join([p for p in parts if p]).strip()
-
+# Sort order for rendering. The model is asked to prioritize but not trusted to
+# order correctly, so Python sorts -- one less thing a small model can get wrong.
+_PRIORITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+_VALID_EFFORT = {"low": "Low", "medium": "Medium", "high": "High"}
 
 
 def _build_principal_payload(
@@ -147,6 +101,7 @@ def _build_principal_payload(
     principal_name: str,
     sub_id_to_name: dict[str, str],
 ) -> dict[str, Any]:
+    """Build the JSON payload describing one principal for the model."""
     assignment_payloads = []
     for sa in principal.risky_assignments:
         r = sa.record
@@ -170,14 +125,13 @@ def _build_principal_payload(
         "severity": principal.cumulative_severity,
         "cumulative_score": principal.cumulative_score,
         "assignments": assignment_payloads,
-        "instruction": (
-            "Return 3-5 plain English bullet points describing what this principal can "
-            "actually do across the environment. Focus on operational impact."
-        ),
     }
 
 
-def _select_principals(top_principals: list[Any], principal_names: dict[tuple[str, str], str]) -> list[Any]:
+def _select_principals(
+    top_principals: list[Any],
+    principal_names: dict[tuple[str, str], str],
+) -> list[Any]:
     print()
     print("AI ENRICHMENT SELECTION")
     print("=" * 90)
@@ -192,111 +146,182 @@ def _select_principals(top_principals: list[Any], principal_names: dict[tuple[st
     print("  - Enter S to skip")
     raw = input("> ").strip()
 
-    if not raw:
-        return []
-    if raw.upper() == "S":
+    if not raw or raw.upper() == "S":
         return []
     if raw == "0":
         return list(top_principals)
 
     selected: list[Any] = []
-    seen = set()
+    seen: set[int] = set()
     for token in [t.strip() for t in raw.split(",") if t.strip()]:
         try:
             idx = int(token)
-            if idx < 1 or idx > len(top_principals):
-                continue
-            zero_idx = idx - 1
-            if zero_idx in seen:
-                continue
-            seen.add(zero_idx)
-            selected.append(top_principals[zero_idx])
         except ValueError:
             continue
+        if idx < 1 or idx > len(top_principals):
+            continue
+        zero_idx = idx - 1
+        if zero_idx in seen:
+            continue
+        seen.add(zero_idx)
+        selected.append(top_principals[zero_idx])
+
     return selected
 
 
-def _select_model_and_confirm(
+def _confirm_endpoint(
+    cfg: LLMConfig,
     selected_principals: list[Any],
     principal_names: dict[tuple[str, str], str],
     sub_id_to_name: dict[str, str],
-) -> tuple[str, dict[str, dict[str, Any]]] | None:
-    print()
-    print("AI MODEL SELECTION")
-    print("=" * 90)
-    for key, info in MODEL_CATALOG.items():
-        print(
-            f"{key}. {info['name']} — {info['label']} "
-            f"(${info['input_per_mtok']:g}/${info['output_per_mtok']:g} per MTok)"
-        )
-    model_choice = input("Select model [1-3, default 2]: ").strip() or "2"
-    if model_choice not in MODEL_CATALOG:
-        print(f"Invalid selection. Defaulting to {MODEL_CATALOG['2']['name']}.")
-        model_choice = "2"
-    model_info = MODEL_CATALOG[model_choice]
+) -> dict[str, dict[str, Any]] | None:
+    """
+    Show the endpoint and estimated size, then confirm.
 
+    The endpoint line is not decoration. Before any RBAC data is transmitted the
+    user should see exactly where it is going, and whether that is off their
+    machine. Returns the per-principal payload map, or None if declined.
+    """
     payload_map: dict[str, dict[str, Any]] = {}
-    total_input_tokens = 0
-    total_output_tokens = 0
     per_principal = []
+    total_input = 0
+    total_output = 0
 
     for p in selected_principals:
         key = f"{p.principal_id}|{p.principal_type}"
-        principal_name = principal_names.get((p.principal_id, p.principal_type), p.principal_id)
-        payload_obj = _build_principal_payload(p, principal_name, sub_id_to_name)
-        payload_text = json.dumps(payload_obj, ensure_ascii=True)
-        input_tokens = _estimate_tokens(SYSTEM_PROMPT) + _estimate_tokens(payload_text)
-        output_tokens = 400
-        total_input_tokens += input_tokens
-        total_output_tokens += output_tokens
-        estimated_cost = _estimate_cost_usd(input_tokens, output_tokens, model_info)
-        per_principal.append((principal_name, input_tokens, output_tokens, estimated_cost))
+        name = principal_names.get((p.principal_id, p.principal_type), p.principal_id)
+        payload_obj = _build_principal_payload(p, name, sub_id_to_name)
         payload_map[key] = payload_obj
 
-    print()
-    print("Estimated cost per selected principal:")
-    for name, in_tok, out_tok, est_cost in per_principal:
-        print(f"  - {name}: ~{in_tok} input tok + ~{out_tok} output tok -> ${est_cost:.6f}")
+        payload_text = json.dumps(payload_obj, ensure_ascii=True)
+        input_tokens = estimate_tokens(SYSTEM_PROMPT) + estimate_tokens(payload_text)
+        output_tokens = 900  # a full JSON playbook is larger than the old prose
+        total_input += input_tokens
+        total_output += output_tokens
+        per_principal.append((name, input_tokens, output_tokens))
 
-    total_estimated = _estimate_cost_usd(total_input_tokens, total_output_tokens, model_info)
     print()
-    print(
-        f"Total estimated cost ({model_info['name']}, {len(selected_principals)} principal(s)): "
-        f"${total_estimated:.6f}"
-    )
+    print("AI ENRICHMENT ENDPOINT")
+    print("=" * 90)
+    print(f"  {cfg.describe_endpoint()}")
+    if not cfg.is_local:
+        print("  Note: principal names, role names, and scope paths will be sent to this endpoint.")
+    print()
+    print("Estimated size per selected principal:")
+    for name, in_tok, out_tok in per_principal:
+        print(f"  - {name}: ~{in_tok} input tok + ~{out_tok} output tok")
+
+    total_cost = estimate_cost_usd(cfg, total_input, total_output)
+    print()
+    if total_cost is None:
+        reason = "local endpoint" if cfg.is_local else f"no price configured for {cfg.model}"
+        print(f"Estimated cost: none ({reason})")
+    else:
+        print(
+            f"Total estimated cost ({cfg.model}, "
+            f"{len(selected_principals)} principal(s)): ${total_cost:.6f}"
+        )
+
     confirm = input("Proceed with AI enrichment? [y/N]: ").strip().lower()
-    if confirm != "y":
+    return payload_map if confirm == "y" else None
+
+
+def _normalize_action(action: Any) -> dict[str, Any] | None:
+    """
+    Coerce one recommended action into a known shape, or drop it.
+
+    A model may return an unexpected priority, a string where a list belongs, or
+    a missing field. Rendering should degrade rather than crash, so anything
+    unusable is skipped and everything else is normalized.
+    """
+    if not isinstance(action, dict):
         return None
 
-    return model_info["name"], payload_map
-
-
-def _parse_remediation_actions(text: str) -> list | None:
-    """Extract the JSON array from the Remediation Actions code block, if present."""
-    match = re.search(r"```json\s*(\[.*?\])\s*```", text, re.DOTALL)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(1))
-    except json.JSONDecodeError:
+    title = str(action.get("title") or "").strip()
+    if not title:
         return None
 
+    priority = str(action.get("priority") or "MEDIUM").strip().upper()
+    if priority not in _PRIORITY_ORDER:
+        priority = "MEDIUM"
 
-def _strip_remediation_section(text: str) -> str:
-    """Remove the 'Remediation Actions:' section and everything after it."""
-    lines = text.splitlines()
-    out: list[str] = []
-    for line in lines:
-        if line.strip() == "Remediation Actions:":
-            break
-        out.append(line)
-    return "\n".join(out).rstrip()
+    effort = _VALID_EFFORT.get(str(action.get("effort") or "").strip().lower(), "Medium")
+
+    steps = action.get("steps") or []
+    if isinstance(steps, str):
+        steps = [steps]
+    steps = [str(s).strip() for s in steps if str(s).strip()]
+
+    return {
+        "priority": priority,
+        "effort": effort,
+        "title": title,
+        "why": str(action.get("why") or "").strip(),
+        "steps": steps,
+        "validation": str(action.get("validation") or "").strip(),
+    }
 
 
-def _append_capability_summary_to_report(
+def _render_summary_text(data: dict[str, Any]) -> str:
+    """
+    Render the model's JSON into the report's prose format.
+
+    The layout is deliberately the same one the model used to be asked to produce,
+    because `pdf_report._split_ai_sections` splits on these headings and the
+    report JSON stores the result. Doing it here makes the output identical every
+    run instead of depending on the model's formatting discipline.
+    """
+    lines: list[str] = ["Capability Summary:"]
+
+    bullets = data.get("capability_summary") or []
+    if isinstance(bullets, str):
+        bullets = [bullets]
+    rendered_bullets = [str(b).strip() for b in bullets if str(b).strip()]
+    if not rendered_bullets:
+        rendered_bullets = ["No capability summary was returned."]
+
+    for bullet in rendered_bullets:
+        lines.append(f"- {bullet}")
+        lines.append("")
+
+    actions = [
+        normalized
+        for normalized in (_normalize_action(a) for a in (data.get("recommended_actions") or []))
+        if normalized
+    ]
+    actions.sort(key=lambda a: _PRIORITY_ORDER[a["priority"]])
+
+    if actions:
+        lines.append("Recommended Actions:")
+        lines.append("")
+        for idx, action in enumerate(actions, 1):
+            lines.append(f"{idx}. [{action['priority']} | Effort: {action['effort']}] {action['title']}")
+            lines.append("")
+            if action["why"]:
+                lines.append("   Why")
+                lines.append("")
+                lines.append(f"   {action['why']}")
+                lines.append("")
+            if action["steps"]:
+                lines.append("   Steps")
+                lines.append("")
+                for step_no, step in enumerate(action["steps"], 1):
+                    lines.append(f"     {step_no}. {step}")
+                lines.append("")
+            if action["validation"]:
+                lines.append("   Validation")
+                lines.append("")
+                lines.append(f"   {action['validation']}")
+                lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+def _append_enrichment_to_report(
     report_path: str,
-    summaries: dict[tuple[str, str], str],
+    enrichment: dict[tuple[str, str], tuple[str, list]],
 ) -> None:
+    """Write rendered summaries and structured remediation actions into the report."""
     report_file = Path(report_path)
     if not report_file.is_absolute():
         report_file = Path(__file__).resolve().parents[1] / report_file
@@ -304,11 +329,10 @@ def _append_capability_summary_to_report(
     data = json.loads(report_file.read_text(encoding="utf-8"))
     for principal in data.get("principals", []):
         key = (principal.get("id", ""), principal.get("type", ""))
-        if key in summaries:
-            full_text = summaries[key]
-            principal["capability_summary"] = _strip_remediation_section(full_text)
-            actions = _parse_remediation_actions(full_text)
-            principal["remediation_actions"] = actions if actions is not None else []
+        if key in enrichment:
+            summary_text, actions = enrichment[key]
+            principal["capability_summary"] = summary_text
+            principal["remediation_actions"] = actions
     report_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
@@ -324,28 +348,26 @@ def run_ai_enrichment(
         print("AI enrichment skipped.")
         return
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("AI enrichment unavailable: ANTHROPIC_API_KEY environment variable is not set.")
-        print("  To set it run: export ANTHROPIC_API_KEY=your_key_here")
+    try:
+        cfg = resolve_config(load_llm_defaults(), dict(os.environ))
+    except LLMError as exc:
+        print(f"AI enrichment unavailable: {exc}")
         return
 
     sub_id_to_name = {sub["id"]: sub["name"] for sub in selected_subs}
-    model_and_payloads = _select_model_and_confirm(selected, principal_names, sub_id_to_name)
-    if not model_and_payloads:
+    payload_map = _confirm_endpoint(cfg, selected, principal_names, sub_id_to_name)
+    if payload_map is None:
         print("AI enrichment cancelled.")
         return
-
-    model_name, payload_map = model_and_payloads
-    client = Anthropic(api_key=api_key)
 
     if not quiet:
         print()
         print("AI ENRICHMENT SUMMARY")
         print("=" * 90)
 
-    summaries: dict[tuple[str, str], str] = {}
+    enrichment: dict[tuple[str, str], tuple[str, list]] = {}
     total = len(selected)
+
     for idx, principal in enumerate(selected, 1):
         principal_name = principal_names.get(
             (principal.principal_id, principal.principal_type),
@@ -354,79 +376,32 @@ def run_ai_enrichment(
         print(f"[{idx}/{total}] Enriching {principal_name} ...")
 
         key = f"{principal.principal_id}|{principal.principal_type}"
-        payload_obj = payload_map[key]
+        payload_text = json.dumps(payload_map[key], ensure_ascii=True, indent=2)
+
         try:
-            response = client.messages.create(
-                model=model_name,
-                max_tokens=4000,
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": json.dumps(payload_obj, ensure_ascii=True, indent=2),
-                    }
-                ],
-            )
-            summary_text = _extract_text_response(response) or "- Unable to generate summary."
-            summaries[(principal.principal_id, principal.principal_type)] = summary_text
-            # Improve terminal readability without changing the stored report content.
-            formatted = []
-            lines = summary_text.splitlines()
-            in_capability = False
-            in_recommended = False
-
-            for line in lines:
-                stripped = line.strip()
-
-                # Stop rendering at the Remediation Actions section
-                if stripped == "Remediation Actions:":
-                    break
-
-                if stripped == "Capability Summary:":
-                    formatted.append(line)
-                    in_capability = True
-                    in_recommended = False
-                    continue
-
-                if stripped == "Recommended Actions:":
-                    if formatted and formatted[-1].strip() != "":
-                        formatted.append("")
-                    formatted.append(line)
-                    in_capability = False
-                    in_recommended = True
-                    continue
-
-                if in_capability and _is_bullet(line):
-                    if formatted and _is_bullet(formatted[-1]):
-                        formatted.append("")
-                    formatted.append(line)
-                    continue
-
-                if in_recommended and _is_step(line):
-                    prev = formatted[-1] if formatted else ""
-                    if prev and _is_step(prev):
-                        formatted.append("")
-                    formatted.append(line)
-                    continue
-
-                formatted.append(line)
-
-            parsed_actions = _parse_remediation_actions(summary_text)
-            if not quiet:
-                print("\n".join(formatted).rstrip())
-                if parsed_actions is not None:
-                    print(f"  -> Generated {len(parsed_actions)} structured remediation action(s).")
-                print()
-        except Exception as exc:
+            data = complete_json(cfg, SYSTEM_PROMPT, payload_text)
+        except LLMError as exc:
             print(f"  Error enriching {principal_name}: {exc}")
             continue
 
-    if not summaries:
+        summary_text = _render_summary_text(data)
+        actions = data.get("remediation_actions")
+        actions = actions if isinstance(actions, list) else []
+
+        enrichment[(principal.principal_id, principal.principal_type)] = (summary_text, actions)
+
+        if not quiet:
+            print(summary_text)
+            if actions:
+                print(f"  -> Generated {len(actions)} structured remediation action(s).")
+            print()
+
+    if not enrichment:
         print("No AI capability summaries were generated.")
         return
 
     try:
-        _append_capability_summary_to_report(report_path, summaries)
+        _append_enrichment_to_report(report_path, enrichment)
         print(f"Updated report with capability summaries: {report_path}")
     except Exception as exc:
         print(f"Failed to append summaries to report JSON: {exc}")

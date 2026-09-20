@@ -22,6 +22,35 @@ def _load_json(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
+def load_llm_defaults(project_root: Path | None = None) -> Dict[str, Any]:
+    """
+    Load non-secret LLM endpoint defaults from config/llm.json.
+
+    The file is optional -- a caller can configure everything through the
+    LLM_BASE_URL / LLM_MODEL / LLM_API_KEY environment variables instead, so a
+    missing file returns empty defaults rather than raising.
+
+    Keys prefixed with an underscore are documentation blocks in the JSON, and
+    "presets" is a reference list of common endpoints. Neither is configuration,
+    so both are dropped here. API keys are never read from this file.
+    """
+    root = project_root or Path(__file__).resolve().parents[1]
+    llm_path = root / "config" / "llm.json"
+
+    if not llm_path.exists():
+        return {}
+
+    raw = _load_json(llm_path)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{llm_path} must be a JSON object")
+
+    return {
+        key: value
+        for key, value in raw.items()
+        if not key.startswith("_") and key != "presets"
+    }
+
+
 def load_risk_config(project_root: Path | None = None) -> RiskConfig:
     """
     Loads risk scoring weights and optional taxonomy mapping from config/.

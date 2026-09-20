@@ -29,6 +29,69 @@ Sample Finding:
 
 ---
 
+## AI Enrichment: Bring Your Own Model
+
+AI enrichment is **optional** and **provider-agnostic**. The analyzer speaks the
+OpenAI-compatible chat completions protocol, so it works with any hosted provider
+or any local inference server. Three settings select the endpoint — nothing else
+changes:
+
+| Setting | Env var | Example |
+|---|---|---|
+| Endpoint | `LLM_BASE_URL` | `https://openrouter.ai/api/v1` |
+| Model | `LLM_MODEL` | `z-ai/glm-5.2` |
+| Credential | `LLM_API_KEY` | omit for most local servers |
+
+Defaults live in `config/llm.json`; environment variables override them. **API keys
+are read from the environment only** and are never written to that file.
+
+### Run it entirely locally
+
+To keep your RBAC data on your own network, point it at a local server:
+
+```bash
+# Ollama
+ollama serve
+export LLM_BASE_URL=http://localhost:11434/v1
+export LLM_MODEL=qwen3:14b
+
+# LM Studio — start the server from the Developer tab
+export LLM_BASE_URL=http://localhost:1234/v1
+
+# llama.cpp
+llama-server -m model.gguf --port 8080
+export LLM_BASE_URL=http://localhost:8080/v1
+```
+
+No API key is needed. `config/llm.json` contains presets for these and for vLLM,
+OpenAI, and Anthropic's compatibility endpoint.
+
+### What leaves your machine
+
+Be precise about this. The analyzer **must** reach `management.azure.com` and
+`graph.microsoft.com` — that is how it reads your RBAC configuration. It is not a
+no-network tool.
+
+What AI enrichment adds is a request to whatever endpoint you configure,
+containing principal names, role names, and scope paths for the principals you
+select. With a local `base_url`, that request never leaves your network. The tool
+prints the endpoint and whether it is local before sending anything, and asks for
+confirmation.
+
+Skip enrichment entirely (enter `S` at the selection prompt) and no LLM endpoint
+is contacted at all.
+
+### Why the model returns JSON
+
+The model is asked for structured JSON, and the analyzer renders all human-readable
+output itself. This keeps the prompt small — which matters for local models with
+limited context — makes parsing deterministic, and means output formatting does not
+depend on the model's formatting discipline. Priorities are sorted and malformed
+fields are normalized in code, so a smaller model degrades gracefully instead of
+breaking the report.
+
+---
+
 ## How It Works
 
 ### Role Classification
@@ -67,7 +130,7 @@ AI output is parsed into structured, machine-executable actions. Each action is 
 - Azure CLI (`az login`)
 - `Reader` role at subscription scope
 - Microsoft Graph read permissions for principal name resolution
-- Anthropic API key (optional — required for AI enrichment only)
+- An OpenAI-compatible LLM endpoint (optional — required for AI enrichment only). Any provider or a local model; see **AI Enrichment: Bring Your Own Model** below.
 
 ### Install
 ```bash
@@ -90,7 +153,9 @@ python -m src.main
 
 ### With AI Enrichment
 ```bash
-export ANTHROPIC_API_KEY=your_key_here
+export LLM_BASE_URL=https://openrouter.ai/api/v1   # or http://localhost:11434/v1
+export LLM_MODEL=z-ai/glm-5.2                      # or your local model name
+export LLM_API_KEY=your_key_here                   # omit for most local servers
 python -m src.main
 ```
 
@@ -328,13 +393,16 @@ Azure-RBAC-Risk-Intelligence/
 │   ├── remediation_engine.py      # Azure SDK execution engine
 │   ├── models.py                  # Data structures
 │   ├── config_loader.py           # Configuration management
+│   ├── llm_client.py              # Provider-agnostic OpenAI-compatible client
 │   ├── build_taxonomy.py          # Regenerates config/role_taxonomy.json
 │   ├── analysis_api.py            # Headless, non-interactive analysis API
 │   └── mcp_server.py              # MCP server (three read-only tools)
 ├── run_mcp_server.py              # MCP server launcher (cwd-independent)
 ├── tests/
-│   └── test_scoring.py            # Scoring regression test (no Azure calls)
+│   ├── test_scoring.py            # Scoring regression test (no Azure calls)
+│   └── test_render.py             # AI output renderer contract test
 ├── config/
+│   ├── llm.json                   # AI endpoint defaults and presets (no secrets)
 │   ├── risk_weights.json          # Scoring weights and severity thresholds
 │   └── role_taxonomy.json         # Role capability classifications
 ├── reports/                       # Generated reports (gitignored)

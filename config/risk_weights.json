@@ -6,7 +6,7 @@
     "data_access": 40,
     "security_visibility": 15,
     "read_only": 5,
-    "custom_or_unknown": 25
+    "custom_or_unknown": 12
   },
   "scope_weights": {
     "subscription": 25,

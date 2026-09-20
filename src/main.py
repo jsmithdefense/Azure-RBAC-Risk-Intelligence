@@ -21,7 +21,7 @@ from .rbac_collector import (
     enumerate_subscriptions,
     select_subscriptions_interactive,
 )
-from .risk_model import CAPABILITY_BUCKETS, score_records, summarize_principal_risk
+from .risk_model import score_records, summarize_principal_risk
 from .scope_utils import extract_scope_display_name
 from .report_writer import write_report
 from .role_taxonomy_generator import infer_bucket_from_actions
@@ -231,24 +231,17 @@ def print_subscription_risk_ranking(subscription_risks: list) -> None:
     print()
 
 
-_BUCKET_ORDER = {bucket: i for i, bucket in enumerate(CAPABILITY_BUCKETS)}
-
-
-def _bucket_rank(bucket: str) -> int:
-    """
-    Lower number = higher priority in the diagnostic output.
-
-    Order comes from CAPABILITY_BUCKETS, which is declared most-to-least severe.
-    """
-    return _BUCKET_ORDER.get(bucket, 99)
-
-
 def print_assigned_role_classifications(
     runtime_taxonomy: dict[str, str],
     runtime_actions: dict[str, str],
+    role_weights: dict[str, int],
 ) -> None:
     """
-    Print a compact view of assigned role and the reason for the classification.
+    Print each assigned role and the reason for its classification.
+
+    The most severe classification is first. The severity comes from the weights
+    in config/risk_weights.json. Do not add a second order in this module. One
+    order existed here before, and it disagreed with the weights.
     """
     print("Assigned roles:")
     print()
@@ -257,7 +250,7 @@ def print_assigned_role_classifications(
 
     rows = sorted(
         runtime_taxonomy.items(),
-        key=lambda item: (_bucket_rank(item[1]), item[0].lower()),
+        key=lambda item: (-role_weights.get(item[1], 0), item[0].lower()),
     )
 
     for role, bucket in rows:
@@ -392,7 +385,7 @@ def main() -> None:
             )
 
     if not args.quiet:
-        print_assigned_role_classifications(all_taxonomies, all_actions)
+        print_assigned_role_classifications(all_taxonomies, all_actions, cfg.role_weights)
 
         print("Top risky principals:")
         print()

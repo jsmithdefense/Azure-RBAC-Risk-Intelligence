@@ -76,15 +76,22 @@ def capability_taxonomy() -> dict[str, Any]:
     """Send the full list of classifications and the weight of each one."""
     role_weights = load_risk_config().role_weights
 
+    # Sort by weight. The weights are the only source of severity order, so this
+    # makes the "ordering" field below correct.
+    ordered = sorted(
+        CAPABILITY_BUCKETS.items(),
+        key=lambda item: -role_weights.get(item[0], 0),
+    )
+
     return {
-        "ordering": "most severe first",
+        "ordering": "most severe first, by risk_weight",
         "classifications": [
             {
                 "name": bucket,
                 "description": description,
                 "risk_weight": role_weights.get(bucket),
             }
-            for bucket, description in CAPABILITY_BUCKETS.items()
+            for bucket, description in ordered
         ],
     }
 

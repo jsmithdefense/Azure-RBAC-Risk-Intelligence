@@ -7,15 +7,18 @@ from .config_loader import RiskConfig
 from .models import RoleAssignmentRecord
 
 
-# This is the full list of capability classifications. The most severe
-# classification is first.
+# This is the full list of capability classifications, and the meaning of each
+# one. This list is the only source of the names and the meanings. The analysis
+# API and the MCP server both read it. The MCP server also sends it to the
+# client. Thus a model cannot invent a classification.
 #
-# This list is the only source. Each part of the tool that needs the names, the
-# sequence or the meaning reads them here. These parts are: the sort in the CLI
-# (main._bucket_rank), the analysis API, and the MCP server. The MCP server also
-# sends this list to the client. Thus a model cannot invent a classification.
+# This sequence is NOT the severity order. The weights in
+# config/risk_weights.json give the severity order. Sort by weight when you need
+# the most severe classification first. Two orders existed before, and they
+# disagreed with each other.
 #
-# The keys must agree with role_weights in config/risk_weights.json.
+# The keys here must be the same as the keys of role_weights in
+# config/risk_weights.json. tests/test_scoring.py makes sure of this.
 CAPABILITY_BUCKETS: dict[str, str] = {
     "privilege_escalation": (
         "Can modify access control. A principal with this role can grant itself "

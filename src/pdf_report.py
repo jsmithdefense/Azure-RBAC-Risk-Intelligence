@@ -14,6 +14,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .scope_utils import extract_scope_display_name
+
 
 def _severity_color(severity: str) -> str:
     mapping = {
@@ -23,26 +25,6 @@ def _severity_color(severity: str) -> str:
         "Low": "#1E8449",
     }
     return mapping.get(severity, "#111111")
-
-
-def _short_sub_name(name: str) -> str:
-    if len(name) <= 24:
-        return name
-    return f"{name[:21]}..."
-
-
-def _scope_display_name(scope: str, scope_type: str) -> str:
-    if scope_type == "subscription":
-        return "subscription"
-    parts = scope.split("/")
-    try:
-        rg_index = parts.index("resourceGroups")
-        rg_name = parts[rg_index + 1] if rg_index + 1 < len(parts) else "unknown"
-    except (ValueError, IndexError):
-        return scope_type
-    if scope_type == "resource" and parts:
-        return f"{rg_name}/{parts[-1]}"
-    return rg_name
 
 
 def _footer(canvas, doc, timestamp: str) -> None:
@@ -106,7 +88,6 @@ def generate_pdf_report(
 
     json_payload = json.loads(json_report_path.read_text(encoding="utf-8"))
     principals_from_json = json_payload.get("principals", [])
-    ai_present = any("capability_summary" in p for p in principals_from_json)
     enriched_map = {
         (p.get("id", ""), p.get("type", "")): p.get("capability_summary", "")
         for p in principals_from_json
@@ -282,7 +263,7 @@ def generate_pdf_report(
         ]
         for sa in principal.risky_assignments:
             r = sa.record
-            scope_disp = _scope_display_name(r.scope, r.scope_type)
+            scope_disp = extract_scope_display_name(r.scope, r.scope_type)
             sev_color = _severity_color(sa.severity)
             sub_nm = sub_id_to_name.get(r.subscription_id, r.subscription_id)
             assign_rows.append(
@@ -322,7 +303,7 @@ def generate_pdf_report(
         story.append(Spacer(1, 0.12 * inch))
 
     # Section 5 (optional)
-    if ai_present:
+    if enriched_map:
         story.append(PageBreak())
         story.append(_p("Section 5: AI Enrichment Summary", h_style))
         for principal in top_principals:

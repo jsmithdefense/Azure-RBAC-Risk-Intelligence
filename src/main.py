@@ -7,7 +7,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import replace
-from typing import Dict, List
 
 from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import DefaultAzureCredential
@@ -22,7 +21,8 @@ from .rbac_collector import (
     enumerate_subscriptions,
     select_subscriptions_interactive,
 )
-from .risk_model import score_records, summarize_principal_risk
+from .risk_model import CAPABILITY_BUCKETS, score_records, summarize_principal_risk
+from .scope_utils import extract_scope_display_name
 from .report_writer import write_report
 from .role_taxonomy_generator import infer_bucket_from_actions
 
@@ -163,36 +163,6 @@ def get_group_member_count(
         return 0
 
 
-def extract_scope_display_name(scope: str, scope_type: str) -> str:
-    """
-    Extract a human-readable name from an Azure scope path.
-    
-    Examples:
-    - /subscriptions/abc/resourceGroups/MyRG → "MyRG"
-    - /subscriptions/abc/resourceGroups/MyRG/providers/.../myVnet → "MyRG/myVnet"
-    - /subscriptions/abc → "subscription"
-    """
-    if scope_type == "subscription":
-        return "subscription"
-    
-    parts = scope.split('/')
-    
-    # Extract resource group name
-    try:
-        rg_index = parts.index('resourceGroups')
-        rg_name = parts[rg_index + 1] if rg_index + 1 < len(parts) else "unknown"
-    except (ValueError, IndexError):
-        return scope_type  # Fallback to generic type
-    
-    # For resource-level, add the resource name
-    if scope_type == "resource" and len(parts) > 0:
-        resource_name = parts[-1]  # Last segment is resource name
-        return f"{rg_name}/{resource_name}"
-    
-    # For resource_group level, just return the RG name
-    return rg_name
-
-
 def calculate_subscription_risk_scores(
     scored_assignments: list,
     selected_subs: list,
@@ -261,20 +231,16 @@ def print_subscription_risk_ranking(subscription_risks: list) -> None:
     print()
 
 
+_BUCKET_ORDER = {bucket: i for i, bucket in enumerate(CAPABILITY_BUCKETS)}
+
+
 def _bucket_rank(bucket: str) -> int:
     """
     Lower number = higher priority in the diagnostic output.
+
+    Order comes from CAPABILITY_BUCKETS, which is declared most-to-least severe.
     """
-    order = {
-        "privilege_escalation": 0,
-        "resource_control_broad": 1,
-        "resource_control_narrow": 2,
-        "data_access": 3,
-        "security_visibility": 4,
-        "read_only": 5,
-        "custom_or_unknown": 6,
-    }
-    return order.get(bucket, 99)
+    return _BUCKET_ORDER.get(bucket, 99)
 
 
 def print_assigned_role_classifications(
@@ -306,7 +272,7 @@ def analyze_subscription(
     subscription_name: str,
     credential: DefaultAzureCredential,
     cfg,
-) -> tuple[List, dict, dict]:
+) -> tuple[list, dict, dict]:
     """
     Analyze a single subscription and return records, taxonomy, and actions.
     """
@@ -366,12 +332,6 @@ def main() -> None:
     role_subscriptions = {}
     sub_id_to_name = {sub['id']: sub['name'] for sub in selected_subs}
 
-    # Now all_records is fully populated — build role_subscriptions here
-    for record in all_records:
-        if record.role_name not in role_subscriptions:
-            role_subscriptions[record.role_name] = set()
-        role_subscriptions[record.role_name].add(sub_id_to_name[record.subscription_id])
-    
     for sub in selected_subs:
         records, taxonomy, actions = analyze_subscription(
             sub['id'],

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-def _build_principal_payload(
+def _build_report_principal(
     principal: Any,
     principal_name: str,
     member_count: int | None,
@@ -72,7 +72,7 @@ def write_report(
             if principal.principal_type == "Group"
             else None
         )
-        principals.append(_build_principal_payload(principal, principal_name, member_count))
+        principals.append(_build_report_principal(principal, principal_name, member_count))
 
     role_classifications = []
     for role_name in sorted(all_taxonomies.keys(), key=str.lower):

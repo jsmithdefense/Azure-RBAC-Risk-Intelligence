@@ -112,6 +112,15 @@ MODEL_CATALOG = {
 }
 
 
+def _is_bullet(line: str) -> bool:
+    return line.lstrip().startswith("- ")
+
+
+def _is_step(line: str) -> bool:
+    s = line.lstrip()
+    return len(s) > 1 and s[0].isdigit() and s[1] == "."
+
+
 def _estimate_tokens(text: str) -> int:
     # Rough approximation: 1 token ~= 4 characters for mixed English/JSON payload.
     return max(1, int(len(text) / 4))
@@ -132,21 +141,6 @@ def _extract_text_response(message: Any) -> str:
     return "\n".join([p for p in parts if p]).strip()
 
 
-def _scope_display_name(scope: str, scope_type: str) -> str:
-    if scope_type == "subscription":
-        return "subscription"
-
-    parts = scope.split("/")
-    try:
-        rg_index = parts.index("resourceGroups")
-        rg_name = parts[rg_index + 1] if rg_index + 1 < len(parts) else "unknown"
-    except (ValueError, IndexError):
-        return scope_type
-
-    if scope_type == "resource" and parts:
-        return f"{rg_name}/{parts[-1]}"
-    return rg_name
-
 
 def _build_principal_payload(
     principal: Any,
@@ -161,7 +155,7 @@ def _build_principal_payload(
                 "role_name": r.role_name,
                 "classification_bucket": sa.bucket,
                 "triggering_action": sa.triggering_action or "N/A",
-                "scope_display_name": _scope_display_name(r.scope, r.scope_type),
+                "scope_display_name": extract_scope_display_name(r.scope, r.scope_type),
                 "scope": r.scope,
                 "scope_type": r.scope_type,
                 "subscription_id": r.subscription_id,
@@ -230,12 +224,14 @@ def _select_model_and_confirm(
     print()
     print("AI MODEL SELECTION")
     print("=" * 90)
-    print("1. claude-haiku-4-5-20251001 — fastest, lowest cost ($1/$5 per MTok)")
-    print("2. claude-sonnet-4-6 — recommended, balanced ($3/$15 per MTok)")
-    print("3. claude-opus-4-6 — most intelligent, highest cost ($5/$25 per MTok)")
+    for key, info in MODEL_CATALOG.items():
+        print(
+            f"{key}. {info['name']} — {info['label']} "
+            f"(${info['input_per_mtok']:g}/${info['output_per_mtok']:g} per MTok)"
+        )
     model_choice = input("Select model [1-3, default 2]: ").strip() or "2"
     if model_choice not in MODEL_CATALOG:
-        print("Invalid selection. Defaulting to claude-sonnet-4-6.")
+        print(f"Invalid selection. Defaulting to {MODEL_CATALOG['2']['name']}.")
         model_choice = "2"
     model_info = MODEL_CATALOG[model_choice]
 
@@ -325,7 +321,7 @@ def run_ai_enrichment(
 ) -> None:
     selected = _select_principals(top_principals, principal_names)
     if not selected:
-        print("AI test skipped.")
+        print("AI enrichment skipped.")
         return
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -378,14 +374,6 @@ def run_ai_enrichment(
             lines = summary_text.splitlines()
             in_capability = False
             in_recommended = False
-
-            def _is_bullet(line: str) -> bool:
-                s = line.lstrip()
-                return s.startswith("- ")
-
-            def _is_step(line: str) -> bool:
-                s = line.lstrip()
-                return len(s) > 1 and s[0].isdigit() and s[1] == "."
 
             for line in lines:
                 stripped = line.strip()

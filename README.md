@@ -71,8 +71,8 @@ AI output is parsed into structured, machine-executable actions. Each action is 
 
 ### Install
 ```bash
-git clone https://github.com/jsmithdefense/Azure-RBAC-Risk-Analyzer
-cd Azure-RBAC-Risk-Analyzer
+git clone https://github.com/jsmithdefense/Azure-RBAC-Risk-Intelligence
+cd Azure-RBAC-Risk-Intelligence
 
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
@@ -227,22 +227,115 @@ REMEDIATION SUMMARY
 
 ---
 
+## MCP Server
+
+The analyzer is also exposed as an [MCP](https://modelcontextprotocol.io) server, so an
+AI agent can query your RBAC posture directly. Three tools, all **read-only** — the
+server cannot modify Azure.
+
+| Tool | Purpose |
+|---|---|
+| `azure_rbac_analyze` | Full analysis: tenant summary, subscription risk ranking, role classifications, ranked principals |
+| `azure_rbac_get_high_risk` | The riskiest principals by cumulative privilege |
+| `azure_rbac_explain_role` | What a given role can actually do, with its full permission set |
+
+It also exposes one resource:
+
+| Resource | Purpose |
+|---|---|
+| `azure-rbac://taxonomy` | The closed set of capability classifications, each with its meaning and risk weight, ordered most to least severe |
+
+The classification vocabulary is published in the server instructions and the tool
+descriptions as well as the resource. This is deliberate: a client that only ever sees
+one classification at a time will invent plausible-sounding categories that do not
+exist, so the closed set travels with every handshake.
+
+### Install
+
+```bash
+pip install fastmcp
+```
+
+### Run
+
+```bash
+python run_mcp_server.py
+```
+
+The server speaks MCP over **stdio**. Use `run_mcp_server.py` rather than
+`src/mcp_server.py` directly: the module uses package-relative imports, and the
+launcher pins the repo root onto `sys.path` so the command works from any
+working directory.
+
+### Authentication
+
+Uses the same `DefaultAzureCredential` as the CLI, so `az login` is all that is
+required. No credentials are stored or passed as arguments. `Reader` at
+subscription scope and Microsoft Graph read access are enough — the server never
+requests write permissions.
+
+### Register with an MCP client
+
+```json
+{
+  "mcp": {
+    "azure-rbac": {
+      "type": "local",
+      "command": [
+        "/absolute/path/to/.venv/bin/python",
+        "/absolute/path/to/run_mcp_server.py"
+      ],
+      "enabled": true,
+      "timeout": 60000
+    }
+  }
+}
+```
+
+On Windows the interpreter is `.venv/Scripts/python.exe`. `timeout` here is the
+handshake timeout, not a per-call timeout — raise it so the Azure SDK import has
+room to load on startup.
+
+### Debugging
+
+```bash
+npx @modelcontextprotocol/inspector python run_mcp_server.py
+```
+
+### Notes
+
+- **AI enrichment is off.** The MCP tools never call the Anthropic API, so no key
+  is needed and no token cost is incurred. AI enrichment remains available in the CLI.
+- **`azure_rbac_analyze` takes 30-120 seconds** on a real tenant. It emits progress
+  notifications while it runs.
+- **Remediation is deliberately not exposed.** Write actions stay in the CLI, behind
+  per-action human approval.
+
+---
+
 ## Project Structure
 ```
-Azure-RBAC-Risk-Analyzer/
+Azure-RBAC-Risk-Intelligence/
 ├── src/
 │   ├── main.py                    # Pipeline orchestration
 │   ├── rbac_collector.py          # Azure RBAC enumeration
 │   ├── role_taxonomy_generator.py # Capability inference
 │   ├── risk_model.py              # Cumulative scoring
-│   ├── scope_utils.py             # Scope normalization
+│   ├── scope_utils.py             # Scope parsing and display names
 │   ├── ai_enrichment.py           # AI analysis and remediation parsing
 │   ├── report_writer.py           # JSON report generation
 │   ├── pdf_report.py              # PDF report generation
 │   ├── remediation_engine.py      # Azure SDK execution engine
 │   ├── models.py                  # Data structures
-│   └── config_loader.py           # Configuration management
+│   ├── config_loader.py           # Configuration management
+│   ├── build_taxonomy.py          # Regenerates config/role_taxonomy.json
+│   ├── analysis_api.py            # Headless, non-interactive analysis API
+│   └── mcp_server.py              # MCP server (three read-only tools)
+├── run_mcp_server.py              # MCP server launcher (cwd-independent)
+├── tests/
+│   └── test_scoring.py            # Scoring regression test (no Azure calls)
 ├── config/
+│   ├── risk_weights.json          # Scoring weights and severity thresholds
 │   └── role_taxonomy.json         # Role capability classifications
 ├── reports/                       # Generated reports (gitignored)
 └── requirements.txt
@@ -261,6 +354,7 @@ Azure-RBAC-Risk-Analyzer/
 - [x] AI capability summaries with prioritized remediation playbooks
 - [x] PDF report export
 - [x] Remediation engine with per-action approval and audit logging
+- [x] MCP server exposing read-only analysis tools to AI agents
 - [ ] Post-remediation PDF report mapping identified risks to executed actions with security posture delta summary
 - [ ] Privilege escalation path detection
 

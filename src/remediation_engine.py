@@ -302,7 +302,7 @@ def run_remediation_engine(report_path: str, credential: Any) -> None:
         _update_audit_record(audit_path, record_id, audit_updates)
 
         status = result["status"]
-        counts[status] = counts.get(status, 0) + 1
+        counts[status] += 1
 
         if status == "success":
             print("  Result: SUCCESS — assignment removed and validated.")

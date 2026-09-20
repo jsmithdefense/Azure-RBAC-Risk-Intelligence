@@ -7,6 +7,47 @@ from .config_loader import RiskConfig
 from .models import RoleAssignmentRecord
 
 
+# The complete capability vocabulary, ordered most to least severe.
+#
+# This is the single source of truth. Anything that needs the list of buckets,
+# their order, or their meaning reads it from here: the CLI's diagnostic sort
+# (main._bucket_rank), the headless API, and the MCP server -- which publishes it
+# to clients so a model cannot invent a bucket that does not exist.
+#
+# Keys must stay in sync with role_weights in config/risk_weights.json.
+CAPABILITY_BUCKETS: dict[str, str] = {
+    "privilege_escalation": (
+        "Can modify access control. A principal with this role can grant itself "
+        "or others additional permissions, which makes it the highest-impact "
+        "class of assignment."
+    ),
+    "resource_control_broad": (
+        "Can create, modify, and delete infrastructure across three or more "
+        "Azure service families. Broad blast radius if the identity is "
+        "compromised."
+    ),
+    "resource_control_narrow": (
+        "Can create, modify, and delete resources within a limited set of Azure "
+        "service families. Real write power, but scoped to a service domain."
+    ),
+    "data_access": (
+        "Can read or extract stored data through the data plane, not just "
+        "resource metadata. Relevant to data exfiltration risk."
+    ),
+    "security_visibility": (
+        "Can view security or monitoring telemetry. Read-only, but reveals "
+        "detection coverage and alerting posture."
+    ),
+    "read_only": (
+        "Limited to metadata inspection. Cannot change resources or access "
+        "control."
+    ),
+    "custom_or_unknown": (
+        "Could not be classified from its permission set. Treat as unknown and "
+        "review the action list manually."
+    ),
+}
+
 DEFAULT_BUCKET = "custom_or_unknown"
 
 
@@ -19,18 +60,6 @@ def classify_role(role_name: str, cfg: RiskConfig) -> str:
     return cfg.role_taxonomy.get(role_name, DEFAULT_BUCKET)
 
 
-def classify_role_with_trigger(record: RoleAssignmentRecord, cfg: RiskConfig) -> tuple[str, str]:
-    """
-    Returns:
-        (bucket, triggering_action_suffix)
-
-    For now, the bucket comes from the runtime taxonomy map used by scoring.
-    The triggering action will remain blank until main.py passes it through.
-    """
-    bucket = classify_role(record.role_name, cfg)
-    return bucket, ""
-
-
 def score_assignment(record: RoleAssignmentRecord, cfg: RiskConfig) -> int:
     """
     Computes a risk score for a normalized RBAC assignment record.
@@ -40,7 +69,7 @@ def score_assignment(record: RoleAssignmentRecord, cfg: RiskConfig) -> int:
       - scope weight (subscription/resource_group/resource)
       - principal modifier (User/Group/ServicePrincipal/ManagedIdentity/Unknown)
     """
-    bucket, _ = classify_role_with_trigger(record, cfg)
+    bucket = classify_role(record.role_name, cfg)
 
     role_weight = cfg.role_weights.get(bucket, cfg.role_weights.get(DEFAULT_BUCKET, 0))
     scope_weight = cfg.scope_weights.get(record.scope_type, 0)
@@ -86,8 +115,8 @@ class ScoredAssignment:
 class PrincipalRiskSummary:
     principal_id: str
     principal_type: str
-    cumulative_score: int  # renamed from highest_score
-    cumulative_severity: str  # renamed from highest_severity
+    cumulative_score: int
+    cumulative_severity: str
     highest_assignment: ScoredAssignment
     risky_assignments: list[ScoredAssignment]
 
@@ -99,7 +128,7 @@ def score_records(records: list[RoleAssignmentRecord], cfg: RiskConfig) -> list[
     out: list[ScoredAssignment] = []
 
     for r in records:
-        bucket, triggering_action = classify_role_with_trigger(r, cfg)
+        bucket = classify_role(r.role_name, cfg)
         s = score_assignment(r, cfg)
 
         out.append(
@@ -108,7 +137,7 @@ def score_records(records: list[RoleAssignmentRecord], cfg: RiskConfig) -> list[
                 score=s,
                 severity=severity_from_score(s, cfg),
                 bucket=bucket,
-                triggering_action=triggering_action,
+                triggering_action="",
             )
         )
 
@@ -137,9 +166,6 @@ def summarize_principal_risk(
     for (principal_id, principal_type), assignments in grouped.items():
         assignments.sort(key=lambda x: x.score, reverse=True)
         highest = assignments[0]
-        
-        # Calculate cumulative score across all assignments.
-
         cumulative_score = sum(a.score for a in assignments)
         cumulative_severity = severity_from_score(cumulative_score, cfg)
 

@@ -6,8 +6,7 @@ from typing import Dict, Iterable, List, Set
 
 from azure.mgmt.authorization import AuthorizationManagementClient
 
-
-DEFAULT_BUCKET = "custom_or_unknown"
+from .risk_model import DEFAULT_BUCKET
 
 ROLE_NAME_OVERRIDES: Dict[str, str] = {
     "Owner": "privilege_escalation",

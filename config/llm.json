@@ -1,11 +1,13 @@
 {
   "_comment": [
-    "AI enrichment endpoint. Any OpenAI-compatible chat completions endpoint works.",
-    "Environment variables override every value here: LLM_BASE_URL, LLM_MODEL, LLM_API_KEY.",
-    "Never put an API key in this file - it is tracked by git. Keys are read from",
-    "the environment only. Use LLM_API_KEY, or a .env file (already gitignored).",
-    "See 'presets' below for common endpoints, including local servers that keep",
-    "your RBAC data on your own network."
+    "This is the endpoint for AI enrichment. Use any endpoint that accepts the",
+    "OpenAI-compatible chat completions protocol.",
+    "An environment variable replaces a value here: LLM_BASE_URL, LLM_MODEL, LLM_API_KEY.",
+    "Do not put an API key in this file. Git controls this file. The tool reads",
+    "the key only from the environment. Use LLM_API_KEY, or a .env file. Git does",
+    "not control a .env file.",
+    "Refer to 'presets' below for example endpoints. Some of them are local",
+    "servers. A local server keeps your RBAC data in your network."
   ],
 
   "base_url": "https://openrouter.ai/api/v1",
@@ -16,55 +18,56 @@
   "timeout_seconds": 300,
 
   "_pricing_comment": [
-    "Optional. USD per million tokens, keyed by model name. Used only to show a",
-    "cost estimate before sending. Omit a model and the tool reports no cost",
-    "estimate rather than inventing one - which is the correct answer for a local",
-    "model, since it is free."
+    "This block is optional. It gives the price in US dollars for one million",
+    "tokens, for each model name. The tool uses it only to estimate the cost",
+    "before it sends data. If a model is not in this block, the tool reports no",
+    "cost. It does not invent a cost. That is correct for a local model, because",
+    "a local model is free."
   ],
   "pricing": {
     "z-ai/glm-5.2": { "input_per_mtok": 0.7, "output_per_mtok": 2.2 }
   },
 
   "_presets_comment": [
-    "Reference only - the tool does not read this block. Copy a base_url and model",
-    "up into the fields above, or export the environment variables."
+    "This block is only an example. The tool does not read it. Copy a base_url",
+    "and a model to the fields above, or set the environment variables."
   ],
   "presets": {
     "openrouter": {
       "base_url": "https://openrouter.ai/api/v1",
       "needs_api_key": true,
-      "note": "Hosted. Your RBAC data is sent to OpenRouter and the upstream model provider."
+      "note": "Remote. The tool sends your RBAC data to OpenRouter and to the model supplier."
     },
     "ollama": {
       "base_url": "http://localhost:11434/v1",
       "model_example": "qwen3:14b",
       "needs_api_key": false,
-      "note": "Local. Data stays on your machine. Run: ollama serve"
+      "note": "Local. The data stays on your machine. Start it with: ollama serve"
     },
     "lm-studio": {
       "base_url": "http://localhost:1234/v1",
       "needs_api_key": false,
-      "note": "Local. Data stays on your machine. Start the server from the LM Studio Developer tab."
+      "note": "Local. The data stays on your machine. Start the server in the LM Studio Developer tab."
     },
     "llama-cpp": {
       "base_url": "http://localhost:8080/v1",
       "needs_api_key": false,
-      "note": "Local. Run: llama-server -m model.gguf --port 8080"
+      "note": "Local. Start it with: llama-server -m model.gguf --port 8080"
     },
     "vllm": {
       "base_url": "http://localhost:8000/v1",
       "needs_api_key": false,
-      "note": "Local or on-premises GPU server."
+      "note": "Local, or a GPU server in your network."
     },
     "openai": {
       "base_url": "https://api.openai.com/v1",
       "needs_api_key": true,
-      "note": "Hosted."
+      "note": "Remote."
     },
     "anthropic": {
       "base_url": "https://api.anthropic.com/v1",
       "needs_api_key": true,
-      "note": "Hosted. Anthropic's OpenAI-compatible endpoint."
+      "note": "Remote. This is the compatible endpoint from Anthropic."
     }
   }
 }

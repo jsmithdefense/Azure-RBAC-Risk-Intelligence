@@ -1,0 +1,33 @@
+# This is the gitleaks configuration for Azure-RBAC-Risk-Intelligence.
+#
+# This repository is public, and its history contained plaintext keys before.
+# Thus a scan operates before each commit. Refer to .git/hooks/pre-commit.
+#
+# A scan of all 63 commits on 2026-09-19 found no secrets. The scan found 81
+# items in .venv, but all of them are in third-party test data and
+# documentation. Git does not control .venv, thus these items are not a risk.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Git does not control these paths, or they hold no credentials"
+
+paths = [
+  # This is the virtual environment. Git does not control it. Exclude it also,
+  # because then a `gitleaks dir .` scan shows only useful results.
+  '''^\.venv/''',
+  # A report can contain a principal id and a subscription id. These are Azure
+  # resource identifiers. They are not credentials. Git does not control them.
+  '''^reports/''',
+  # This file connects 861 Azure role names to classifications. The text looks
+  # random, but it contains no secrets.
+  '''^config/role_taxonomy\.json$''',
+]
+
+regexes = [
+  # These are example values in the README and in the configuration comments.
+  '''your_key_here''',
+  '''<your-[a-z-]+>''',
+  '''sk-or-v1-<''',
+]

@@ -1,24 +1,27 @@
 """
-AI enrichment: plain-English capability summaries and remediation playbooks.
+AI enrichment. This module makes capability summaries and remediation plans in
+plain English.
 
-Provider-agnostic. The endpoint, model, and credential come from
-config/llm.json and the environment (see src/llm_client.py). A hosted API and a
-local inference server take the same code path -- there is no special case for
-either, so a business can point this at its own endpoint and the RBAC data never
-leaves its network.
+The module does not depend on one supplier. The endpoint, the model and the
+credential come from config/llm.json and from the environment. Refer to
+src/llm_client.py. A remote service and a local model server use the same code.
+There is no special condition for one or the other. Thus a company can use its
+own endpoint, and the RBAC data stays in its network.
 
-Two design rules worth knowing before editing:
+Read these two rules before you change this module:
 
-1. **The model returns JSON. Python renders all text.** The previous version
-   asked the model to produce an exact prose layout -- indentation depth, blank
-   line placement, title punctuation -- and then regex-searched that prose for an
-   embedded JSON block. That is fragile for a strong model and unreliable for a
-   small local one. Now the model returns data and `_render_summary_text` does
-   the formatting, so output is identical every run and the parse is deterministic.
+1. **The model sends JSON. Python makes all the text.** The previous version told
+   the model to make an exact text layout. It specified the indentation, the
+   empty lines and the punctuation of each title. Then it used a regular
+   expression to find a JSON block in that text. This is not reliable with a
+   large model, and it fails with a small local model. Now the model sends data,
+   and `_render_summary_text` makes the text. Thus the result is the same after
+   each analysis, and the data is easy to read.
 
-2. **The rendered text keeps the old format exactly.** `pdf_report` splits it on
-   the "Capability Summary:" and "Recommended Actions:" headings, and the report
-   JSON stores it under `capability_summary`. Those consumers are unchanged.
+2. **The text keeps the previous layout exactly.** `pdf_report` divides the text
+   at the headings "Capability Summary:" and "Recommended Actions:". The report
+   file keeps the text in the field `capability_summary`. Do not change the
+   layout. If you change it, you must change those two users also.
 """
 
 from __future__ import annotations
@@ -90,8 +93,9 @@ Rules:
 - Copy principal_id, scope, and subscription_id EXACTLY from the input. Never invent or abbreviate an identifier.
 - Return only the JSON object. No prose, no markdown fence, no commentary."""
 
-# Sort order for rendering. The model is asked to prioritize but not trusted to
-# order correctly, so Python sorts -- one less thing a small model can get wrong.
+# This is the sort order. The prompt tells the model to set a priority, but the
+# tool does not obey the model's sequence. Python sorts the actions. Thus a small
+# model has one less opportunity to make an error.
 _PRIORITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 _VALID_EFFORT = {"low": "Low", "medium": "Medium", "high": "High"}
 
@@ -101,7 +105,7 @@ def _build_principal_payload(
     principal_name: str,
     sub_id_to_name: dict[str, str],
 ) -> dict[str, Any]:
-    """Build the JSON payload describing one principal for the model."""
+    """Make the JSON data that describes one principal. Send it to the model."""
     assignment_payloads = []
     for sa in principal.risky_assignments:
         r = sa.record
@@ -176,11 +180,13 @@ def _confirm_endpoint(
     sub_id_to_name: dict[str, str],
 ) -> dict[str, dict[str, Any]] | None:
     """
-    Show the endpoint and estimated size, then confirm.
+    Show the endpoint and the estimated size. Then ask the user to agree.
 
-    The endpoint line is not decoration. Before any RBAC data is transmitted the
-    user should see exactly where it is going, and whether that is off their
-    machine. Returns the per-principal payload map, or None if declined.
+    The endpoint line is necessary. The user must see where the RBAC data goes,
+    and must know if the data goes out of the machine. Show this before you send
+    any data.
+
+    Return the data for each principal. Return None if the user does not agree.
     """
     payload_map: dict[str, dict[str, Any]] = {}
     per_principal = []
@@ -195,7 +201,7 @@ def _confirm_endpoint(
 
         payload_text = json.dumps(payload_obj, ensure_ascii=True)
         input_tokens = estimate_tokens(SYSTEM_PROMPT) + estimate_tokens(payload_text)
-        output_tokens = 900  # a full JSON playbook is larger than the old prose
+        output_tokens = 900  # A full JSON plan is larger than the previous text.
         total_input += input_tokens
         total_output += output_tokens
         per_principal.append((name, input_tokens, output_tokens))
@@ -228,11 +234,12 @@ def _confirm_endpoint(
 
 def _normalize_action(action: Any) -> dict[str, Any] | None:
     """
-    Coerce one recommended action into a known shape, or drop it.
+    Change one recommended action to the correct shape. Remove the action if it
+    is not usable.
 
-    A model may return an unexpected priority, a string where a list belongs, or
-    a missing field. Rendering should degrade rather than crash, so anything
-    unusable is skipped and everything else is normalized.
+    A model can send an unknown priority. It can send a text string where a list
+    is necessary. It can omit a field. The tool must continue in these
+    conditions. Thus the function corrects what it can, and removes the rest.
     """
     if not isinstance(action, dict):
         return None
@@ -264,12 +271,13 @@ def _normalize_action(action: Any) -> dict[str, Any] | None:
 
 def _render_summary_text(data: dict[str, Any]) -> str:
     """
-    Render the model's JSON into the report's prose format.
+    Make the report text from the JSON that the model sends.
 
-    The layout is deliberately the same one the model used to be asked to produce,
-    because `pdf_report._split_ai_sections` splits on these headings and the
-    report JSON stores the result. Doing it here makes the output identical every
-    run instead of depending on the model's formatting discipline.
+    The layout is the same layout that the prompt previously specified. This is
+    intentional. `pdf_report._split_ai_sections` divides the text at these
+    headings, and the report file keeps the result. Python makes the text here.
+    Thus the result is the same after each analysis, and it does not depend on
+    the model.
     """
     lines: list[str] = ["Capability Summary:"]
 
@@ -321,7 +329,7 @@ def _append_enrichment_to_report(
     report_path: str,
     enrichment: dict[tuple[str, str], tuple[str, list]],
 ) -> None:
-    """Write rendered summaries and structured remediation actions into the report."""
+    """Write the summaries and the remediation actions into the report file."""
     report_file = Path(report_path)
     if not report_file.is_absolute():
         report_file = Path(__file__).resolve().parents[1] / report_file

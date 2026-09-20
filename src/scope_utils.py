@@ -1,9 +1,9 @@
 """
-Azure RBAC scope parsing.
+This module reads an Azure RBAC scope string.
 
-This module owns everything that interprets a scope string, so the rest of the
-codebase does not re-implement it. Both functions here were previously
-duplicated across main.py, ai_enrichment.py and pdf_report.py.
+All the code that interprets a scope is in this module. Thus the other modules
+do not write this logic again. Both functions were previously in three modules:
+main.py, ai_enrichment.py and pdf_report.py.
 """
 
 
@@ -29,12 +29,12 @@ def classify_scope(scope: str) -> str:
 
 def extract_scope_display_name(scope: str, scope_type: str) -> str:
     """
-    Produce a short human-readable name for a scope.
+    Make a short name for a scope. A person can read this name.
 
-    Subscription scopes have no meaningful sub-name, so they render as
-    "subscription". Resource-group scopes render as the group name, and resource
-    scopes render as "<resource group>/<resource>". Anything unparseable falls
-    back to the scope type rather than raising.
+    A subscription scope has no sub-name. Thus it becomes "subscription". A
+    resource group scope becomes the name of the group. A resource scope becomes
+    "<resource group>/<resource>". If the function cannot read the scope, it
+    returns the scope type. It does not raise an error.
     """
     if scope_type == "subscription":
         return "subscription"

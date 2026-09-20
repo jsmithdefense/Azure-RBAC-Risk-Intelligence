@@ -1,11 +1,12 @@
 """
-Renderer regression test. No network, no Azure.
+This test examines the text that ai_enrichment makes. It does not use the network
+and it does not call Azure.
 
-Guards the contract between ai_enrichment and its two consumers: pdf_report
-splits the rendered text on its headings, and the report JSON stores it. If the
-renderer drifts, the PDF silently loses content -- so assert the shape here.
+Two other parts use this text. `pdf_report` divides the text at the headings, and
+the report file keeps the text. If the layout changes, the PDF loses content and
+shows no error. Thus this test examines the layout.
 
-Run from the repo root:
+Start the test from the root of the repository:
 
     python -m tests.test_render
 """
@@ -55,7 +56,7 @@ def test_critical_sorts_first() -> None:
 
 
 def test_action_title_format_is_stable() -> None:
-    # pdf_report and the terminal both rely on this exact bracket format.
+    # pdf_report and the terminal both need this exact format.
     text = _render_summary_text(SAMPLE)
     assert "[CRITICAL | Effort: Medium] Convert to PIM eligible" in text
 

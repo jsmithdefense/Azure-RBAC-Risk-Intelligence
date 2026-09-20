@@ -1,24 +1,26 @@
 """
-Headless analysis API.
+This module gives the RBAC analysis without questions to the user.
 
-This module is the non-interactive entry point into the RBAC analysis pipeline.
-It exists so that callers which cannot answer `input()` prompts -- the MCP
-server, tests, future automation -- can run the same analysis the CLI runs.
+Some callers cannot answer an `input()` question. The MCP server, the tests and
+future automation are examples. This module lets them do the same analysis that
+the CLI does.
 
-Design rules:
+These are the design rules:
 
-1. `src/main.py` is not modified. The CLI keeps its exact behavior. This module
-   composes the same building blocks (`analyze_subscription`, `score_records`,
-   `summarize_principal_risk`, ...) in a non-interactive order and never calls
-   `select_subscriptions_interactive`, `run_ai_enrichment`, or the remediation
-   engine.
-2. Nothing here writes to stdout. Several pipeline functions call `print()`.
-   Under an MCP stdio transport, stray stdout writes corrupt the JSON-RPC
-   stream, so every call into printing code is wrapped in `_silenced()`, which
-   redirects stdout to stderr.
-3. Everything returned is a plain JSON-serializable dict or list of dicts, so
-   callers can hand results straight to a structured-output channel.
-4. Read-only. No write, no remediation. That is deliberate and is the v1 scope.
+1. This module does not change `src/main.py`. Thus the CLI operates as before.
+   This module uses the same parts in a different sequence:
+   `analyze_subscription`, `score_records`, `summarize_principal_risk` and
+   others. It never calls `select_subscriptions_interactive`,
+   `run_ai_enrichment` or the remediation engine.
+2. This module writes nothing to stdout. Some functions in the analysis call
+   `print()`. The MCP stdio transport sends the JSON-RPC data on stdout. Thus
+   other text on stdout makes that data bad. For this reason, each call to a
+   function that prints is inside `_silenced()`. That function sends stdout to
+   stderr.
+3. Each result is a dict or a list of dicts, and JSON can hold it. Thus the
+   caller can send the result directly to a structured-output channel.
+4. This module only reads. It does not write, and it does not do remediation.
+   That is intentional, and it is the limit of version 1.
 """
 
 from __future__ import annotations
@@ -54,12 +56,12 @@ from .role_taxonomy_generator import ROLE_NAME_OVERRIDES, infer_bucket_from_acti
 @contextlib.contextmanager
 def _silenced() -> Iterator[None]:
     """
-    Redirect stdout to stderr for the duration of the block.
+    Send stdout to stderr while the block operates.
 
-    The pipeline functions print progress lines. On an MCP stdio transport
-    stdout carries the JSON-RPC framing, so those prints would corrupt the
-    protocol. Sending them to stderr keeps them visible in server logs while
-    leaving stdout clean.
+    The analysis functions print progress lines. The MCP stdio transport sends
+    the JSON-RPC data on stdout. Thus these lines would make that data bad. If
+    the lines go to stderr, the server log still shows them, and stdout stays
+    correct.
     """
     with contextlib.redirect_stdout(sys.stderr):
         yield
@@ -67,10 +69,10 @@ def _silenced() -> Iterator[None]:
 
 def _credential() -> DefaultAzureCredential:
     """
-    Build the credential the CLI uses.
+    Make the credential that the CLI uses.
 
-    `exclude_interactive_browser_credential=True` matches main.py and is
-    required here: a headless caller must never trigger a browser prompt.
+    `exclude_interactive_browser_credential=True` is the same as in main.py, and
+    it is necessary here. A caller without a user must never start a browser.
     """
     return DefaultAzureCredential(exclude_interactive_browser_credential=True)
 
@@ -80,11 +82,10 @@ def _resolve_target_subscriptions(
     subscription_ids: Optional[list[str]],
 ) -> list[dict[str, str]]:
     """
-    Pick which subscriptions to analyze without prompting.
+    Select the subscriptions to analyze. Do not ask the user.
 
-    This is the non-interactive replacement for
-    `select_subscriptions_interactive`. With no ids, every accessible enabled
-    subscription is analyzed.
+    This function replaces `select_subscriptions_interactive`. If you give no
+    ids, the function analyzes each enabled subscription that you can see.
     """
     with _silenced():
         available = enumerate_subscriptions(credential)
@@ -113,7 +114,7 @@ def _resolve_target_subscriptions(
 
 
 def _assignment_to_dict(sa: ScoredAssignment) -> dict[str, Any]:
-    """Flatten a ScoredAssignment into a JSON-safe dict."""
+    """Change a ScoredAssignment to a dict that JSON can hold."""
     record = sa.record
     return {
         "role_name": record.role_name,
@@ -133,7 +134,7 @@ def _principal_to_dict(
     display_name: str,
     member_count: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Flatten a PrincipalRiskSummary into a JSON-safe dict."""
+    """Change a PrincipalRiskSummary to a dict that JSON can hold."""
     return {
         "display_name": display_name,
         "principal_id": principal.principal_id,
@@ -153,11 +154,11 @@ def _enrich_principals(
     resolve_names: bool,
 ) -> list[dict[str, Any]]:
     """
-    Resolve display names and group member counts, then flatten to dicts.
+    Find the display name and the number of group members. Then make dicts.
 
-    Name resolution is a Microsoft Graph round trip per principal, so it is
-    optional. `resolve_principal_name` already falls back to the raw id on
-    failure, which keeps a missing Graph permission from failing the whole run.
+    Each name needs one request to Microsoft Graph. Thus this step is optional.
+    If a request fails, `resolve_principal_name` returns the id. Thus an absent
+    Graph permission does not stop the analysis.
     """
     out: list[dict[str, Any]] = []
 

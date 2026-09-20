@@ -1,15 +1,17 @@
 """
-Scoring regression test. No Azure calls - runs entirely on hand-built records.
+This test examines the scores. It does not call Azure. It uses records that this
+file makes.
 
-Run from the repo root:
+Start the test from the root of the repository:
 
     python -m tests.test_scoring
 
-Deliberately has no pytest dependency: plain asserts and a __main__ block keep
-the project's dependency list minimal while still failing loudly on regression.
+This test does not need pytest. That is intentional. It uses `assert` and a
+`__main__` block. Thus the list of requirements stays short, but the test still
+fails clearly if the scores change.
 
-This is the safety net for changes to risk_model.py and role_taxonomy_generator.py.
-The expected values below are derived from config/risk_weights.json:
+Use this test when you change risk_model.py or role_taxonomy_generator.py. The
+values below come from config/risk_weights.json:
   Owner  = privilege_escalation(50) + subscription(25) + ServicePrincipal(10) = 85
   Reader = read_only(5)             + resource_group(15) + User(0)            = 20
 """
@@ -52,7 +54,7 @@ def test_scoring() -> None:
 
     assert len(scored) == 2, f"expected 2 scored assignments, got {len(scored)}"
 
-    # score_records must return highest risk first
+    # score_records must put the highest risk first.
     assert scored[0].record.role_name == "Owner", (
         f"expected Owner ranked first, got {scored[0].record.role_name}"
     )

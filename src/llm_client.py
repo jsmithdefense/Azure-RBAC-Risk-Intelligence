@@ -1,10 +1,10 @@
 """
-Provider-agnostic LLM client.
+Client for an AI model. The client does not depend on one supplier.
 
-Speaks the OpenAI-compatible chat completions protocol
-(``POST {base_url}/chat/completions``). That is not a decision to use OpenAI --
-it is the protocol nearly every hosted provider and every local inference server
-already implements, so one client covers all of them:
+The client speaks the OpenAI-compatible chat completions protocol
+(``POST {base_url}/chat/completions``). This is not a decision to use OpenAI.
+Almost all suppliers and all local model servers accept this protocol. Thus one
+client is sufficient for all of them:
 
     OpenRouter      https://openrouter.ai/api/v1
     Ollama          http://localhost:11434/v1
@@ -12,24 +12,24 @@ already implements, so one client covers all of them:
     llama.cpp       http://localhost:8080/v1
     vLLM            http://localhost:8000/v1
     OpenAI          https://api.openai.com/v1
-    Anthropic       https://api.anthropic.com/v1   (compatibility endpoint)
+    Anthropic       https://api.anthropic.com/v1   (compatible endpoint)
 
-Three settings select the provider and nothing else changes: ``base_url``,
-``model``, ``api_key``. A hosted endpoint and a local model take the same code
-path -- there is no special case for either.
+Three settings select the supplier: ``base_url``, ``model`` and ``api_key``.
+Nothing else changes. A remote service and a local model use the same code. There
+is no special condition for one or the other.
 
-Implemented on ``urllib`` from the standard library rather than a vendor SDK.
-The request is a single JSON POST, the project already uses ``urllib`` for its
-Microsoft Graph calls, and this way the dependency list gets shorter instead of
-longer -- and no vendor SDK remains to create an accidental path back to one
-provider.
+This module uses ``urllib`` from the standard library. It does not use a supplier
+SDK. There are three reasons:
+- The request is one JSON POST.
+- The project already uses ``urllib`` for the Microsoft Graph requests.
+- The list of requirements becomes shorter, not longer.
 
-Privacy note, stated accurately: this tool must reach ``management.azure.com``
-and ``graph.microsoft.com`` to do its job, so it is not a no-network tool. What
-this module guarantees is narrower and still worth having -- analysis data goes
-only to the endpoint you configure. Point ``base_url`` at a local server and the
-RBAC data never leaves your network. ``describe_endpoint()`` exists so the caller
-can show the user where data is about to be sent before it is sent.
+Be accurate about privacy. This tool must connect to ``management.azure.com`` and
+to ``graph.microsoft.com``. That is its function. Thus the tool does use the
+network. This module gives a smaller guarantee: analysis data goes only to the
+endpoint that you configure. If ``base_url`` points to a local server, the RBAC
+data stays in your network. Use ``describe_endpoint()`` to show the user where
+the data goes before you send it.
 """
 
 from __future__ import annotations
@@ -41,21 +41,21 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
 
-# Hosts that never leave the machine or the local network. Used only to label the
-# endpoint for the user -- non-local endpoints are fully supported, not blocked.
+# These hosts are on your machine or in your network. The tool uses this set only
+# to tell the user where the data goes. The tool does not block remote endpoints.
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}
 
 
 class LLMError(RuntimeError):
-    """Raised when the endpoint cannot be reached or returns an unusable reply."""
+    """The endpoint did not answer, or its answer is not usable."""
 
 
 @dataclass(frozen=True)
 class LLMConfig:
     """
-    Everything needed to talk to one endpoint.
+    All the settings for one endpoint.
 
-    api_key is optional because local servers generally do not require one.
+    The api_key is optional. Most local servers do not need a key.
     """
 
     base_url: str
@@ -64,8 +64,9 @@ class LLMConfig:
     max_tokens: int = 4000
     temperature: float = 0.0
     timeout_seconds: int = 300
-    # Optional, for cost estimation only. None means "price unknown" -- which is
-    # the honest answer for a local model (free) or an unfamiliar endpoint.
+    # These two prices are optional. The tool uses them only to estimate cost.
+    # None means the price is not known. That is correct for a local model,
+    # because a local model is free.
     input_per_mtok: Optional[float] = None
     output_per_mtok: Optional[float] = None
 
@@ -75,11 +76,12 @@ class LLMConfig:
 
     @property
     def is_local(self) -> bool:
-        """True when the endpoint is loopback or a private-range address."""
+        """Return True if the endpoint is on your machine or in your network."""
         host = self.host.lower()
         if host in _LOCAL_HOSTS:
             return True
-        # Private IPv4 ranges, so a LAN inference box also counts as local.
+        # These are the private IPv4 ranges. Thus a model server in your network
+        # is also local.
         return (
             host.startswith("10.")
             or host.startswith("192.168.")
@@ -88,10 +90,10 @@ class LLMConfig:
 
     def describe_endpoint(self) -> str:
         """
-        One line naming where data will be sent.
+        Give one line that tells where the data goes.
 
-        Callers should print this before the first request. Users deserve to know
-        whether their RBAC data is leaving the machine.
+        Show this line before the first request. The user must know if the RBAC
+        data goes out of the machine.
         """
         location = "local - data stays on your network" if self.is_local else "remote"
         return f"{self.model} via {self.base_url} ({location})"
@@ -103,25 +105,28 @@ def resolve_config(
     model_override: Optional[str] = None,
 ) -> LLMConfig:
     """
-    Build an LLMConfig from file defaults, environment overrides, and an optional
-    explicit model choice.
+    Make an LLMConfig from the configuration file, the environment and an
+    optional model name.
 
-    Precedence, lowest to highest: config file, environment, explicit argument.
-    The API key is read *only* from the environment -- never from the config file,
-    so a key cannot end up in a tracked file.
+    The order of precedence is: the file first, then the environment, then the
+    model_override argument.
+
+    The tool reads the API key only from the environment. It does not read the
+    key from the configuration file. Thus a key cannot go into a file that git
+    controls.
     """
     base_url = (env.get("LLM_BASE_URL") or file_defaults.get("base_url") or "").strip()
     model = (model_override or env.get("LLM_MODEL") or file_defaults.get("model") or "").strip()
 
     if not base_url:
         raise LLMError(
-            "No LLM endpoint configured. Set LLM_BASE_URL or add base_url to "
-            "config/llm.json. Examples: https://openrouter.ai/api/v1 for "
-            "OpenRouter, http://localhost:11434/v1 for Ollama."
+            "No LLM endpoint is configured. Set LLM_BASE_URL, or add base_url to "
+            "config/llm.json. For example, use https://openrouter.ai/api/v1 for "
+            "OpenRouter, or http://localhost:11434/v1 for Ollama."
         )
     if not model:
         raise LLMError(
-            "No model configured. Set LLM_MODEL or add model to config/llm.json."
+            "No model is configured. Set LLM_MODEL, or add model to config/llm.json."
         )
 
     pricing = (file_defaults.get("pricing") or {}).get(model, {})
@@ -144,15 +149,15 @@ def complete_json(
     user_content: str,
 ) -> dict[str, Any]:
     """
-    Ask the model for a JSON object and return it parsed.
+    Ask the model for a JSON object. Return the object.
 
-    ``response_format`` is sent as a hint. Endpoints that support it (OpenAI,
-    OpenRouter on many models, Ollama, vLLM, llama.cpp) constrain the output to
-    valid JSON; endpoints that do not simply ignore the field. Either way the
-    reply is parsed defensively below, because a model may still wrap JSON in
-    prose or a markdown fence.
+    The request contains ``response_format``. Some endpoints obey this field and
+    make only correct JSON. Other endpoints ignore the field. Thus the function
+    always examines the answer with care, because a model can put the JSON in
+    prose or in a markdown block.
 
-    Raises LLMError with an actionable message on transport or parse failure.
+    If the request fails, or if the answer is not JSON, the function raises
+    LLMError with a message that tells the user what to do.
     """
     body = {
         "model": cfg.model,
@@ -170,7 +175,7 @@ def complete_json(
 
 
 def _post_chat(cfg: LLMConfig, body: dict[str, Any]) -> str:
-    """POST to /chat/completions and return the assistant message text."""
+    """Send the request to /chat/completions. Return the text of the answer."""
     url = f"{cfg.base_url}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if cfg.api_key:
@@ -190,27 +195,28 @@ def _post_chat(cfg: LLMConfig, body: dict[str, Any]) -> str:
         detail = _read_error_body(exc)
         if exc.code in (401, 403):
             raise LLMError(
-                f"{cfg.base_url} rejected the credential ({exc.code}). "
-                "Check LLM_API_KEY. Local servers usually need no key at all."
+                f"{cfg.base_url} refused the credential ({exc.code}). "
+                "Examine LLM_API_KEY. Most local servers do not need a key."
                 + detail
             ) from exc
         if exc.code == 404:
             raise LLMError(
-                f"{url} returned 404. base_url should be the API root including "
-                "the version, for example http://localhost:11434/v1 -- not the "
-                "bare host and not the full /chat/completions path." + detail
+                f"{url} gave the answer 404. The base_url must be the root of the "
+                "API and must include the version. For example, use "
+                "http://localhost:11434/v1. Do not use only the host name. Do not "
+                "include /chat/completions." + detail
             ) from exc
-        raise LLMError(f"{url} returned HTTP {exc.code}.{detail}") from exc
+        raise LLMError(f"{url} gave the answer HTTP {exc.code}.{detail}") from exc
     except urllib.error.URLError as exc:
         raise LLMError(
-            f"Could not reach {cfg.base_url} ({exc.reason}). "
-            "If this is a local server, confirm it is running and that the port "
-            "is correct."
+            f"The tool cannot connect to {cfg.base_url} ({exc.reason}). "
+            "If this is a local server, make sure that the server operates and "
+            "that the port is correct."
         ) from exc
     except TimeoutError as exc:
         raise LLMError(
-            f"{cfg.base_url} did not respond within {cfg.timeout_seconds}s. "
-            "Local models on modest hardware can be slow -- raise "
+            f"{cfg.base_url} did not answer in {cfg.timeout_seconds} seconds. "
+            "A local model on a small computer can be slow. Increase "
             "timeout_seconds in config/llm.json."
         ) from exc
 
@@ -218,30 +224,30 @@ def _post_chat(cfg: LLMConfig, body: dict[str, Any]) -> str:
 
 
 def _read_error_body(exc: urllib.error.HTTPError) -> str:
-    """Include the endpoint's own error text when it provides one."""
+    """Get the error text from the endpoint, if the endpoint sends one."""
     try:
         raw = exc.read().decode("utf-8", errors="replace").strip()
     except Exception:
         return ""
-    return f" Endpoint said: {raw[:400]}" if raw else ""
+    return f" The endpoint says: {raw[:400]}" if raw else ""
 
 
 def _extract_message_text(payload: dict[str, Any], cfg: LLMConfig) -> str:
     """
-    Pull the assistant text out of an OpenAI-shaped response.
+    Get the text of the answer from an OpenAI-compatible reply.
 
-    Some endpoints (reasoning models especially) return an empty ``content`` and
-    put the text in ``reasoning``; fall back to that before giving up.
+    Some models put the text in ``reasoning`` and leave ``content`` empty. Thus
+    the function examines ``reasoning`` also, before it raises an error.
     """
     choices = payload.get("choices") or []
     if not choices:
         error = payload.get("error")
         if error:
             message = error.get("message") if isinstance(error, dict) else str(error)
-            raise LLMError(f"{cfg.base_url} returned an error: {message}")
+            raise LLMError(f"{cfg.base_url} sent this error: {message}")
         raise LLMError(
-            f"{cfg.base_url} returned no choices. This usually means the model "
-            f"name '{cfg.model}' is not available at that endpoint."
+            f"{cfg.base_url} sent no choices. Usually this means that the model "
+            f"'{cfg.model}' is not available at that endpoint."
         )
 
     message = choices[0].get("message") or {}
@@ -253,8 +259,8 @@ def _extract_message_text(payload: dict[str, Any], cfg: LLMConfig) -> str:
     if not text:
         finish = choices[0].get("finish_reason")
         raise LLMError(
-            f"{cfg.model} returned an empty response (finish_reason={finish!r}). "
-            "If finish_reason is 'length', raise max_tokens in config/llm.json."
+            f"{cfg.model} sent an empty answer (finish_reason={finish!r}). "
+            "If finish_reason is 'length', increase max_tokens in config/llm.json."
         )
 
     return text
@@ -262,11 +268,12 @@ def _extract_message_text(payload: dict[str, Any], cfg: LLMConfig) -> str:
 
 def _parse_json_reply(text: str) -> dict[str, Any]:
     """
-    Parse a JSON object out of the reply.
+    Find a JSON object in the answer and return it.
 
-    Tries the whole string first, then a ```json fence, then the outermost brace
-    pair. Small local models often add a sentence or a fence even when asked not
-    to, and that should not fail the run.
+    The function makes three attempts. First it reads the full text. Then it
+    reads the content of a ```json block. Then it reads the text between the
+    first brace and the last brace. Small models frequently add a sentence or a
+    block, and that must not stop the analysis.
     """
     candidates = [text]
 
@@ -295,19 +302,19 @@ def _parse_json_reply(text: str) -> dict[str, Any]:
             return parsed
 
     raise LLMError(
-        "The model did not return valid JSON. First 300 characters of the reply:\n"
-        f"{text[:300]}\n"
-        "Smaller models sometimes ignore the JSON instruction. Try a larger "
-        "model, or one whose endpoint supports constrained JSON output."
+        "The model did not send correct JSON. These are the first 300 characters "
+        f"of the answer:\n{text[:300]}\n"
+        "Small models sometimes do not obey the JSON instruction. Use a larger "
+        "model, or use an endpoint that can make only correct JSON."
     )
 
 
 def estimate_tokens(text: str) -> int:
     """
-    Rough token estimate: about four characters per token.
+    Estimate the number of tokens. Use four characters for one token.
 
-    Deliberately approximate. It is used to size a request and to give the user a
-    sense of scale before sending, not for billing.
+    This value is approximate. The tool uses it to show the size of a request to
+    the user. Do not use this value to calculate a bill.
     """
     return max(1, len(text) // 4)
 
@@ -318,11 +325,11 @@ def estimate_cost_usd(
     output_tokens: int,
 ) -> Optional[float]:
     """
-    Estimated cost, or None when no price is known.
+    Estimate the cost in US dollars. Return None if the price is not known.
 
-    None is the correct answer for a local model (it is free) and for an endpoint
-    whose pricing is not in config. Callers must handle None rather than printing
-    a fabricated $0.00.
+    None is the correct result for a local model, because a local model is free.
+    None is also correct for an endpoint that has no price in the configuration.
+    The caller must accept None. The caller must not show a false cost of $0.00.
     """
     if cfg.input_per_mtok is None or cfg.output_per_mtok is None:
         return None

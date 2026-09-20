@@ -1,21 +1,26 @@
 """
-MCP server exposing Azure RBAC risk analysis as three read-only tools.
+This is the MCP server. It gives Azure RBAC risk analysis as three tools. The
+tools only read data.
 
-Framework choice -- fastmcp 4.0.5 over the official `mcp` SDK 2.2.0:
-1. fastmcp 4.0.5 depends on mcp 2.2.0, so it is a layer over the official SDK
-   rather than an alternative to it -- no protocol lag, no either/or tradeoff.
-2. Context.report_progress(progress, total, message) is verified present, which
-   the 30-120s analyze call needs; dict returns become structuredContent free.
-3. Context.elicit is available for the deferred v1.1 remediation confirm flow.
+The server uses fastmcp 4.0.5. It does not use the official `mcp` SDK 2.2.0
+directly. There are three reasons:
+1. fastmcp 4.0.5 needs mcp 2.2.0. Thus fastmcp is a layer above the official
+   SDK. It is not a different product, and the protocol is the same.
+2. `Context.report_progress(progress, total, message)` is available. The
+   analysis tool needs it, because the analysis can take 120 seconds. A tool
+   that returns a dict also gets structuredContent automatically.
+3. `Context.elicit` is available. Version 1.1 needs it for the remediation tool,
+   because that tool must ask the user to agree.
 
-Scope is read-only by design. There is no remediation or write tool here; that
-is deferred to v1.1 behind a confirm flow and guardrails.
+These tools only read. That is intentional. No tool changes Azure. Version 1.1
+will add a remediation tool, but only with a step that asks the user to agree,
+and with limits.
 
-The capability vocabulary is published in two places -- the server instructions
-and the tool descriptions below, plus the azure-rbac://taxonomy resource. This is
-deliberate: a client that only sees one classification at a time will invent
-plausible-sounding buckets that do not exist. Publishing the closed set prevents
-that.
+The server sends the list of classifications in three places: the server
+instructions, the description of each tool, and the resource
+azure-rbac://taxonomy. This is intentional. A client that sees only one
+classification at a time will invent a classification that does not exist. If
+the server sends the full list, the client cannot do this.
 """
 
 from __future__ import annotations
@@ -33,8 +38,8 @@ from .analysis_api import run_analysis as _run_analysis
 from .config_loader import load_risk_config
 from .risk_model import CAPABILITY_BUCKETS
 
-# Rendered into the instructions and the two tool descriptions that surface a
-# classification, so the closed set travels with every initialize and tools/list.
+# The server puts this text in the instructions and in each tool description.
+# Thus the full list goes to the client with each initialize and tools/list.
 _BUCKET_LIST = ", ".join(CAPABILITY_BUCKETS)
 _VOCABULARY_NOTE = (
     f"Role classifications are a closed set of exactly {len(CAPABILITY_BUCKETS)} "
@@ -68,7 +73,7 @@ mcp = FastMCP(
     mime_type="application/json",
 )
 def capability_taxonomy() -> dict[str, Any]:
-    """Publish the closed classification vocabulary with weights."""
+    """Send the full list of classifications and the weight of each one."""
     role_weights = load_risk_config().role_weights
 
     return {
@@ -86,10 +91,11 @@ def capability_taxonomy() -> dict[str, Any]:
 
 def _default_subscription_ids(subscription_id: Optional[str]) -> Optional[list[str]]:
     """
-    Normalize a single optional subscription id into the list the API takes.
+    Change one optional subscription id to the list that the API needs.
 
-    Falls back to AZURE_SUBSCRIPTION_ID when set, so the server can be pinned to
-    one subscription via config. None means "every visible subscription".
+    If the argument is empty, the function uses AZURE_SUBSCRIPTION_ID. Thus you
+    can limit the server to one subscription with the configuration. None means
+    all the subscriptions that you can see.
     """
     if subscription_id and subscription_id.strip():
         return [subscription_id.strip()]
@@ -100,14 +106,16 @@ def _default_subscription_ids(subscription_id: Optional[str]) -> Optional[list[s
 
 def _progress_reporter(ctx: Context):
     """
-    Build a thread-safe progress callback.
+    Make a function that reports progress. The function is safe in a thread.
 
-    run_analysis() executes in a worker thread via asyncio.to_thread, but
-    ctx.report_progress is a coroutine bound to the event loop. This bridges the
-    two with run_coroutine_threadsafe so progress from the worker reaches the
-    client without touching the loop from the wrong thread.
+    `run_analysis()` operates in a worker thread, because `asyncio.to_thread`
+    starts it. But `ctx.report_progress` is a coroutine, and it belongs to the
+    event loop. `run_coroutine_threadsafe` connects the two. Thus the progress
+    goes from the worker to the client, and no thread touches the loop
+    incorrectly.
 
-    Must be called from inside a running loop (i.e. from a tool coroutine).
+    You must call this function from a loop that operates, that is, from a tool
+    coroutine.
     """
     loop = asyncio.get_running_loop()
 

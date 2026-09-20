@@ -24,15 +24,15 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 def load_llm_defaults(project_root: Path | None = None) -> Dict[str, Any]:
     """
-    Load non-secret LLM endpoint defaults from config/llm.json.
+    Read the LLM endpoint settings from config/llm.json. These are not secrets.
 
-    The file is optional -- a caller can configure everything through the
-    LLM_BASE_URL / LLM_MODEL / LLM_API_KEY environment variables instead, so a
-    missing file returns empty defaults rather than raising.
+    The file is optional. You can set LLM_BASE_URL, LLM_MODEL and LLM_API_KEY in
+    the environment instead. Thus, if the file is absent, this function returns
+    an empty result. It does not raise an error.
 
-    Keys prefixed with an underscore are documentation blocks in the JSON, and
-    "presets" is a reference list of common endpoints. Neither is configuration,
-    so both are dropped here. API keys are never read from this file.
+    A key that starts with an underscore is a comment in the JSON file. The key
+    "presets" is a list of example endpoints. Neither is a setting. Thus this
+    function removes both. This function never reads an API key from the file.
     """
     root = project_root or Path(__file__).resolve().parents[1]
     llm_path = root / "config" / "llm.json"

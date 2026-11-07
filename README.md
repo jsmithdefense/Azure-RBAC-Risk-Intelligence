@@ -4,6 +4,9 @@ Azure environments accumulate RBAC assignments over time. Role names are vague, 
 
 **Enumerate, score, and remediate overprivileged identities across your Azure tenant.**
 
+> [!WARNING]
+> The role classification has 8 known defects, and the scores are not validated. Read [Known Issues](#known-issues) before you use the results.
+
 ---
 
 Sample Finding:
@@ -120,6 +123,29 @@ AI output is parsed into structured, machine-executable actions. Each action is 
 | `remove_role_assignment` | Executes removal via Azure SDK, validates success |
 | `convert_to_pim_eligible` | Provides step-by-step PIM instructions |
 | `manual_review_required` | Logs description for human execution |
+
+---
+
+## Known Issues
+
+An audit on 2026-09-19 found 9 defects in the role classification and the scoring. Commit `8c1de93` corrected 1 defect. 8 defects are open.
+
+The scores are not validated. Do not use them as a final risk ranking. Examine each finding before you approve a remediation.
+
+| # | Defect | Result |
+|---|---|---|
+| 1 | The classifier finds no provider family in the wildcard action `*`. | `Contributor` gets `resource_control_narrow` (20). `Tag Contributor` gets `resource_control_broad` (35). At subscription scope, a user with `Tag Contributor` scores 60 (High). A user with `Contributor` scores 45 (Medium). |
+| 2 | The classifier does not read `notActions` or `notDataActions`. | `notActions` is the only difference between `Owner` and `Contributor`. `Owner` is correct only because it is in `ROLE_NAME_OVERRIDES`. |
+| 3 | The escalation rule matches `roleassignments/read`. It does not require a write. | Permission to read role assignments gets `privilege_escalation` (50). That is the same weight as `Owner`. |
+| 4 | The read-only rule requires `/read` in every action. | One support permission or one `/action` permission stops the rule. For example, `Monitoring Reader` gets `resource_control_narrow`. |
+| 5 | The `data_access` rule does not examine the verb. | Read access and write access to data get the same weight (40). `Storage Blob Data Reader` and `Storage Blob Data Contributor` get the same score. |
+| 6 | The classifier counts each `/action` permission as a write. | `listKeys/action` returns storage account keys, but the classifier puts it in `resource_control_narrow`, not with data access. |
+| 7 | The broad rule counts 3 or more provider families with write access. | The count measures the length of the role definition, not the risk. `Tag Contributor` passes the rule with its deployment, alert and support permissions. |
+| 8 | The severity thresholds are for one assignment, but the tool applies them to the cumulative score. | Several small assignments add up to `Critical`. One assignment to a user has a maximum score of 75, so a user is never `Critical` from one assignment. |
+
+### Plan
+
+Each correction changes the scores. Thus the new scores must agree with known correct results. A Terraform test lab will supply identities with known access. The defects will be corrected after that lab is ready.
 
 ---
 
@@ -425,6 +451,7 @@ Azure-RBAC-Risk-Intelligence/
 - [x] MCP server exposing read-only analysis tools to AI agents
 - [ ] Post-remediation PDF report mapping identified risks to executed actions with security posture delta summary
 - [ ] Privilege escalation path detection
+- [ ] Correct the 8 open defects in [Known Issues](#known-issues), verified against a test lab with known access
 
 ---
 
